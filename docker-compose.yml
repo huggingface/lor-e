@@ -1,0 +1,10 @@
+version: '3'
+services:
+  pg:
+    image: "pgvector/pgvector:pg17"
+    ports:
+      - 5432:5432
+    environment:
+        POSTGRES_USER: local
+        POSTGRES_PASSWORD: supersecurepassword
+

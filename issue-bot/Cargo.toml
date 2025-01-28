@@ -1,0 +1,22 @@
+[package]
+name = "issue-bot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+# axum = { version = "0.8", features = ["macros"] }
+axum = "0.8"
+config = { version = "0.15", features = ["yaml"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+nanoid = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
+thiserror = "2"
+tokio = { version = "1.0", features = ["full"] }
+tower = { version = "0.5.2", features = ["util", "timeout"] }
+tower-http = { version = "0.6.1", features = ["add-extension", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

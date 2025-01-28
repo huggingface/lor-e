@@ -1,0 +1,9 @@
+database:
+  host: localhost
+  password: supersecurepassword
+  port: 5432
+  user: local
+
+server:
+  ip: 0.0.0.0
+  port: 4242
