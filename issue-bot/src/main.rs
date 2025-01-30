@@ -8,11 +8,15 @@ use axum::{
     routing::get,
     Router,
 };
-use config::{load_config, IssueBotConfig};
+use config::{load_config, IssueBotConfig, ServerConfig};
+use metrics::start_metrics_server;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use middlewares::RequestSpan;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use tokio::net::TcpListener;
+use sqlx::{
+    postgres::{PgConnectOptions, PgPoolOptions},
+    Pool, Postgres,
+};
+use tokio::{net::TcpListener, task::JoinHandle};
 use tower::{BoxError, ServiceBuilder};
 use tower_http::trace::TraceLayer;
 use tracing::{info, Span};
@@ -20,8 +24,15 @@ use tracing_subscriber::EnvFilter;
 
 mod config;
 mod errors;
+mod metrics;
 mod middlewares;
 mod routes;
+
+#[derive(Clone)]
+pub struct AppState {
+    auth_token: String,
+    pool: Pool<Postgres>,
+}
 
 fn setup_metrics_recorder() -> PrometheusHandle {
     const EXPONENTIAL_SECONDS: &[f64] = &[
@@ -30,7 +41,7 @@ fn setup_metrics_recorder() -> PrometheusHandle {
 
     PrometheusBuilder::new()
         .set_buckets_for_metric(
-            Matcher::Full("repository_scanner_api_response_time_hist".to_string()),
+            Matcher::Full("issue_bot_api_response_time_hist".to_string()),
             EXPONENTIAL_SECONDS,
         )
         .unwrap()
@@ -68,25 +79,17 @@ pub fn init_logging() {
     });
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    init_logging();
+pub async fn flatten(handle: JoinHandle<anyhow::Result<()>>) -> anyhow::Result<()> {
+    match handle.await {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(err)) => Err(err),
+        Err(err) => Err(anyhow::anyhow!("handling failed: {err}")),
+    }
+}
 
-    let config: IssueBotConfig = load_config("ISSUE_BOT")?;
-
-    let opts = PgConnectOptions::new()
-        .host(&config.database.host)
-        .password(&config.database.password)
-        .port(config.database.port)
-        .username(&config.database.user);
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect_with(opts)
-        .await?;
-
-    let app = Router::new()
+fn app(state: AppState) -> Router {
+    Router::new()
         .nest("/event", routes::event_router())
-        .nest("/metrics", routes::metrics_router(setup_metrics_recorder()))
         .route_layer(middleware::from_fn(middlewares::track_metrics))
         .layer(
             ServiceBuilder::new()
@@ -115,13 +118,48 @@ async fn main() -> anyhow::Result<()> {
         )
         .layer(middleware::from_fn(middlewares::add_request_id))
         .route("/health", get(|| async { StatusCode::OK.into_response() }))
-        .with_state(pool);
+        .with_state(state)
+}
 
-    let addr = format!("{}:{}", config.server.ip, config.server.port);
+async fn start_main_server(config: ServerConfig, state: AppState) -> anyhow::Result<()> {
+    let addr = format!("{}:{}", config.ip, config.port);
     info!(addr, "starting server");
 
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service()).await?;
+    axum::serve(listener, app(state)).await?;
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    init_logging();
+
+    let config: IssueBotConfig = load_config("ISSUE_BOT")?;
+
+    let opts: PgConnectOptions = config.database.connection_string.parse()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(config.database.max_connections)
+        .connect_with(opts)
+        .await?;
+
+    let state = AppState {
+        auth_token: config.auth_token,
+        pool,
+    };
+
+    let host = config.server.ip.clone();
+    let metrics_port = config.server.metrics_port;
+
+    tokio::try_join!(
+        start_main_server(config.server, state),
+        flatten(tokio::spawn(start_metrics_server(
+            host,
+            metrics_port,
+            false,
+            setup_metrics_recorder()
+        )))
+    )?;
 
     Ok(())
 }

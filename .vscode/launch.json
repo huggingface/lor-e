@@ -1,0 +1,18 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "codelldb",
+      "request": "launch",
+      "name": "Debug API",
+      "program": "${workspaceFolder}/issue-bot/target/debug/issue-bot",
+      "args": [],
+      "cwd": "${workspaceFolder}/issue-bot",
+      "terminal": "integrated",
+      "stopOnEntry": false,
+      "sourceLanguages": [
+        "rust"
+      ]
+    }
+  ]
+}

@@ -1,9 +1,10 @@
+auth_token: tmpsecret
+
 database:
-  host: localhost
-  password: supersecurepassword
-  port: 5432
-  user: local
+  connection_string: postrgres://local:supersecurepassword@localhost:5432/
+  max_connections: 5
 
 server:
   ip: 0.0.0.0
+  metrics_port: 4243
   port: 4242

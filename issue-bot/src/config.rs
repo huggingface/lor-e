@@ -3,20 +3,20 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct DatabaseConfig {
-    pub host: String,
-    pub password: String,
-    pub port: u16,
-    pub user: String,
+    pub connection_string: String,
+    pub max_connections: u32,
 }
 
 #[derive(Deserialize)]
 pub struct ServerConfig {
     pub ip: String,
+    pub metrics_port: u16,
     pub port: u16,
 }
 
 #[derive(Deserialize)]
 pub struct IssueBotConfig {
+    pub auth_token: String,
     pub database: DatabaseConfig,
     pub server: ServerConfig,
 }
