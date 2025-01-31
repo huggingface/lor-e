@@ -22,28 +22,102 @@ fn compute_signature(payload: &[u8], secret: &str) -> String {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ActionType {
+pub enum CommentActionType {
     Created,
     Deleted,
     Edited,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewActionType {
+    Dismissed,
+    Edited,
+    Submitted,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueActionType {
+    Opened,
+    Edited,
+    /// We don't care about other action types
+    #[serde(other)]
+    Ignored,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestActionType {
+    Opened,
+    Edited,
+    /// We don't care about other action types
+    #[serde(other)]
+    Ignored,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Comment {
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Issue {
+    action: IssueActionType,
+    issue: IssueData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IssueData {
+    body: String,
+}
+
 /// Issue & Pull Request comments
 #[derive(Debug, Deserialize)]
 pub struct IssueComment {
-    action: ActionType,
+    action: CommentActionType,
+    comment: Comment,
+    issue: IssueData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequest {
+    action: PullRequestActionType,
+    pull_request: PullRequestData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequestData {
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Review {
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequestReview {
+    action: ReviewActionType,
+    pull_request: PullRequestData,
+    review: Review,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct PullRequestReviewComment {
-    action: ActionType,
+    action: CommentActionType,
+    comment: Comment,
+    pull_request: PullRequestData,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum GithubWebhook {
     IssueComment(IssueComment),
+    Issue(Issue),
     PullRequestReviewComment(PullRequestReviewComment),
+    PullRequestReview(PullRequestReview),
+    PullRequest(PullRequest),
 }
 
 pub async fn github_webhook(
@@ -64,12 +138,14 @@ pub async fn github_webhook(
         return Err(ApiError::SignatureMismatch);
     }
 
-    info!(
-        "raw body: {}",
-        String::from_utf8(body_bytes.to_vec()).unwrap()
-    );
     let webhook = serde_json::from_slice::<GithubWebhook>(&body_bytes)?;
-    info!("{webhook:?}");
+    match webhook {
+        GithubWebhook::Issue(issue) => todo!(),
+        GithubWebhook::IssueComment(comment) => todo!(),
+        GithubWebhook::PullRequest(pr) => todo!(),
+        GithubWebhook::PullRequestReview(review) => todo!(),
+        GithubWebhook::PullRequestReviewComment(comment) => todo!(),
+    }
 
     Ok(())
 }
