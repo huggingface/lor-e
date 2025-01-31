@@ -21,8 +21,29 @@ fn compute_signature(payload: &[u8], secret: &str) -> String {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct GithubWebhook {
-    tmp: String,
+#[serde(rename_all = "snake_case")]
+pub enum ActionType {
+    Created,
+    Deleted,
+    Edited,
+}
+
+/// Issue & Pull Request comments
+#[derive(Debug, Deserialize)]
+pub struct IssueComment {
+    action: ActionType,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequestReviewComment {
+    action: ActionType,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum GithubWebhook {
+    IssueComment(IssueComment),
+    PullRequestReviewComment(PullRequestReviewComment),
 }
 
 pub async fn github_webhook(
@@ -43,6 +64,10 @@ pub async fn github_webhook(
         return Err(ApiError::SignatureMismatch);
     }
 
+    info!(
+        "raw body: {}",
+        String::from_utf8(body_bytes.to_vec()).unwrap()
+    );
     let webhook = serde_json::from_slice::<GithubWebhook>(&body_bytes)?;
     info!("{webhook:?}");
 
