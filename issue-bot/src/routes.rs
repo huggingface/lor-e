@@ -9,6 +9,7 @@ use axum::{
 };
 use chrono::Utc;
 use hmac::{Hmac, Mac};
+use pgvector::Vector;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tracing::info;
@@ -171,6 +172,11 @@ impl Display for GithubWebhook {
     }
 }
 
+#[derive(Deserialize)]
+struct CommentBody {
+    body: String,
+}
+
 pub async fn github_webhook(
     State(state): State<AppState>,
     req: Request<Body>,
@@ -192,30 +198,36 @@ pub async fn github_webhook(
     let webhook = serde_json::from_slice::<GithubWebhook>(&body_bytes)?;
     let now = Utc::now();
     let webhook_type = webhook.to_string();
+    let mut issue_id: Option<i64> = None;
     match webhook {
         GithubWebhook::Issue(issue) => {
             info!("handling {} (state: {})", webhook_type, issue.action);
             match issue.action {
                 IssueActionType::Opened => {
-                    sqlx::query!(
-                    r#"insert into issues (github_id, title, body, issue_type, url, created_at, updated_at)
-                       values ($1, $2, $3, $4, $5, $6, $7)"#,
-                    issue.issue.id,
-                    issue.issue.title,
-                    issue.issue.body,
-                    "issue",
-                    issue.issue.url,
-                    now,
-                    now
-                )
-                .execute(&state.pool)
-                .await?;
+                    let issue_text = format!("# {}\n{}", issue.issue.title, issue.issue.body);
+                    let embedding =
+                        Vector::from(state.embedding_api.generate_embedding(issue_text).await?);
+                    sqlx::query(
+                        r#"insert into issues (github_id, title, body, issue_type, url, embedding, created_at, updated_at)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8)"#
+                    )
+                    .bind(issue.issue.id)
+                    .bind(issue.issue.title)
+                    .bind(issue.issue.body)
+                    .bind("issue")
+                    .bind(issue.issue.url)
+                    .bind(embedding)
+                    .bind(now)
+                    .bind(now)
+                    .execute(&state.pool)
+                    .await?;
                 }
                 IssueActionType::Edited => {
+                    issue_id = Some(issue.issue.id);
                     sqlx::query!(
                         r#"update issues
-                       set title = $1, body = $2, url = $3, updated_at = $4
-                       where github_id = $5"#,
+                           set title = $1, body = $2, url = $3, updated_at = $4
+                           where github_id = $5"#,
                         issue.issue.title,
                         issue.issue.body,
                         issue.issue.url,
@@ -225,6 +237,7 @@ pub async fn github_webhook(
                     .execute(&state.pool)
                     .await?;
                 }
+                // FIXME: delete associated comments, reviews & review comments
                 IssueActionType::Deleted => {
                     sqlx::query!(r#"DELETE FROM issues WHERE github_id = $1"#, issue.issue.id)
                         .execute(&state.pool)
@@ -237,25 +250,27 @@ pub async fn github_webhook(
             info!("handling {} (state: {})", webhook_type, comment.action);
             match comment.action {
                 CommentActionType::Created => {
+                    issue_id = Some(comment.issue.id);
                     sqlx::query!(
-                    r#"insert into issue_comments (github_id, body, url, created_at, updated_at, issue_id)
-                       values ($1, $2, $3, $4, $5,
-                              (select id from issues where github_id = $6))"#,
-                    comment.comment.id,
-                    comment.comment.body,
-                    comment.comment.url,
-                    now,
-                    now,
-                    comment.issue.id,
-                )
-                .execute(&state.pool)
-                .await?;
+                        r#"insert into issue_comments (github_id, body, url, created_at, updated_at, issue_id)
+                           values ($1, $2, $3, $4, $5,
+                                  (select id from issues where github_id = $6))"#,
+                        comment.comment.id,
+                        comment.comment.body,
+                        comment.comment.url,
+                        now,
+                        now,
+                        comment.issue.id,
+                    )
+                    .execute(&state.pool)
+                    .await?;
                 }
                 CommentActionType::Edited => {
+                    issue_id = Some(comment.issue.id);
                     sqlx::query!(
                         r#"update issue_comments
-                       set body = $1, url = $2, updated_at = $3
-                       where github_id = $4"#,
+                           set body = $1, url = $2, updated_at = $3
+                           where github_id = $4"#,
                         comment.comment.body,
                         comment.comment.url,
                         now,
@@ -265,6 +280,7 @@ pub async fn github_webhook(
                     .await?;
                 }
                 CommentActionType::Deleted => {
+                    issue_id = Some(comment.issue.id);
                     sqlx::query!(
                         r#"DELETE FROM issue_comments WHERE github_id = $1"#,
                         comment.comment.id
@@ -278,25 +294,27 @@ pub async fn github_webhook(
             info!("handling {} (state: {})", webhook_type, pr.action);
             match pr.action {
                 PullRequestActionType::Opened => {
+                    issue_id = Some(pr.pull_request.id);
                     sqlx::query!(
-                    r#"insert into issues (github_id, title, body, issue_type, url, created_at, updated_at)
-                       values ($1, $2, $3, $4, $5, $6, $7)"#,
-                    pr.pull_request.id,
-                    pr.pull_request.title,
-                    pr.pull_request.body,
-                    "pull_request",
-                    pr.pull_request.url,
-                    now,
-                    now
-                )
-                .execute(&state.pool)
-                .await?;
+                        r#"insert into issues (github_id, title, body, issue_type, url, created_at, updated_at)
+                           values ($1, $2, $3, $4, $5, $6, $7)"#,
+                        pr.pull_request.id,
+                        pr.pull_request.title,
+                        pr.pull_request.body,
+                        "pull_request",
+                        pr.pull_request.url,
+                        now,
+                        now
+                    )
+                    .execute(&state.pool)
+                    .await?;
                 }
                 PullRequestActionType::Edited => {
+                    issue_id = Some(pr.pull_request.id);
                     sqlx::query!(
                         r#"update issues
-                       set title = $1, body = $2, url = $3, updated_at = $4
-                       where github_id = $5"#,
+                           set title = $1, body = $2, url = $3, updated_at = $4
+                           where github_id = $5"#,
                         pr.pull_request.title,
                         pr.pull_request.body,
                         pr.pull_request.url,
@@ -313,25 +331,27 @@ pub async fn github_webhook(
             info!("handling {} (state: {})", webhook_type, review.action);
             match review.action {
                 ReviewActionType::Submitted => {
+                    issue_id = Some(review.pull_request.id);
                     sqlx::query!(
-                    r#"insert into pull_request_reviews (github_id, body, url, created_at, updated_at, issue_id)
-                       values ($1, $2, $3, $4, $5,
-                              (select id from issues where github_id = $6))"#,
-                    review.review.id,
-                    review.review.body,
-                    review.review.url,
-                    now,
-                    now,
-                    review.pull_request.id,
-                )
-                .execute(&state.pool)
-                .await?;
+                        r#"insert into pull_request_reviews (github_id, body, url, created_at, updated_at, issue_id)
+                           values ($1, $2, $3, $4, $5,
+                                  (select id from issues where github_id = $6))"#,
+                        review.review.id,
+                        review.review.body,
+                        review.review.url,
+                        now,
+                        now,
+                        review.pull_request.id,
+                    )
+                    .execute(&state.pool)
+                    .await?;
                 }
                 ReviewActionType::Edited => {
+                    issue_id = Some(review.pull_request.id);
                     sqlx::query!(
                         r#"update pull_request_reviews
-                       set body = $1, url = $2, updated_at = $3
-                       where github_id = $4"#,
+                           set body = $1, url = $2, updated_at = $3
+                           where github_id = $4"#,
                         review.review.body,
                         review.review.url,
                         now,
@@ -347,25 +367,27 @@ pub async fn github_webhook(
             info!("handling {} (state: {})", webhook_type, comment.action);
             match comment.action {
                 CommentActionType::Created => {
+                    issue_id = Some(comment.pull_request.id);
                     sqlx::query!(
-                    r#"insert into pull_request_review_comments (github_id, body, url, created_at, updated_at, issue_id)
-                       values ($1, $2, $3, $4, $5,
-                              (select id from issues where github_id = $6))"#,
-                    comment.comment.id,
-                    comment.comment.body,
-                    comment.comment.url,
-                    now,
-                    now,
-                    comment.pull_request.id,
-                )
-                .execute(&state.pool)
-                .await?;
+                        r#"insert into pull_request_review_comments (github_id, body, url, created_at, updated_at, issue_id)
+                           values ($1, $2, $3, $4, $5,
+                                  (select id from issues where github_id = $6))"#,
+                        comment.comment.id,
+                        comment.comment.body,
+                        comment.comment.url,
+                        now,
+                        now,
+                        comment.pull_request.id,
+                    )
+                    .execute(&state.pool)
+                    .await?;
                 }
                 CommentActionType::Edited => {
+                    issue_id = Some(comment.pull_request.id);
                     sqlx::query!(
                         r#"update pull_request_review_comments
-                       set body = $1, url = $2, updated_at = $3
-                       where github_id = $4"#,
+                           set body = $1, url = $2, updated_at = $3
+                           where github_id = $4"#,
                         comment.comment.body,
                         comment.comment.url,
                         now,
@@ -375,6 +397,7 @@ pub async fn github_webhook(
                     .await?;
                 }
                 CommentActionType::Deleted => {
+                    issue_id = Some(comment.pull_request.id);
                     sqlx::query!(
                         r#"DELETE FROM pull_request_review_comments WHERE github_id = $1"#,
                         comment.comment.id
@@ -384,6 +407,64 @@ pub async fn github_webhook(
                 }
             }
         }
+    }
+
+    if let Some(issue_id) = issue_id {
+        let issue = sqlx::query!(
+            r#"
+                SELECT
+                  i.title,
+                  i.body,
+                  (
+                    SELECT JSON_AGG(json_build_object('body', ic.body))
+                    FROM issue_comments AS ic
+                    WHERE ic.issue_id = i.id
+                  ) AS issue_comments,
+                  (
+                    SELECT JSON_AGG(json_build_object('body', prr.body))
+                    FROM pull_request_reviews AS prr
+                    WHERE prr.issue_id = i.id
+                  ) AS pull_request_reviews,
+                  (
+                    SELECT JSON_AGG(json_build_object('body', prrc.body))
+                    FROM pull_request_review_comments AS prrc
+                    WHERE prrc.issue_id = i.id
+                  ) AS pull_request_review_comments
+                FROM
+                  issues AS i
+                WHERE
+                  i.github_id = $1;
+            "#,
+            issue_id,
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        let comment_string = [
+            issue.issue_comments,
+            issue.pull_request_reviews,
+            issue.pull_request_review_comments,
+        ]
+        .into_iter()
+        .flat_map(|opt| opt.map(serde_json::from_value::<Vec<CommentBody>>))
+        .flatten()
+        .flatten()
+        .map(|b| b.body)
+        .collect::<Vec<String>>()
+        .join("\n----\nComment: ");
+        let issue_text = format!(
+            "# {}\n{}\n----\nComment: {}",
+            issue.title, issue.body, comment_string
+        );
+        let embedding = Vector::from(state.embedding_api.generate_embedding(issue_text).await?);
+        sqlx::query(
+            r#"update issues
+               set embedding = $1
+               where github_id = $2"#,
+        )
+        .bind(embedding)
+        .bind(issue_id)
+        .execute(&state.pool)
+        .await?;
     }
 
     Ok(())
@@ -450,14 +531,17 @@ mod tests {
     use crate::{
         app,
         config::{load_config, IssueBotConfig},
+        embeddings::inference_endpoints::EmbeddingApi,
         AppState,
     };
 
     #[sqlx::test(fixtures("lor_e"))]
     async fn test_github_webhook_handler(pool: Pool<Postgres>) {
         let config: IssueBotConfig = load_config("ISSUE_BOT_TEST").unwrap();
+        let embedding_api = EmbeddingApi::new(config.model_api).await.unwrap();
         let state = AppState {
             auth_token: config.auth_token.clone(),
+            embedding_api,
             pool,
         };
         let mut app = app(state);
@@ -501,9 +585,11 @@ mod tests {
     #[sqlx::test]
     async fn test_hf_webhook_handler(pool: Pool<Postgres>) {
         let config: IssueBotConfig = load_config("ISSUE_BOT_TEST").unwrap();
+        let embedding_api = EmbeddingApi::new(config.model_api).await.unwrap();
         let auth_token = config.auth_token.clone();
         let state = AppState {
             auth_token: auth_token.clone(),
+            embedding_api,
             pool,
         };
         let app = app(state);

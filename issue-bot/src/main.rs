@@ -9,6 +9,7 @@ use axum::{
     Router,
 };
 use config::{load_config, IssueBotConfig, ServerConfig};
+use embeddings::inference_endpoints::EmbeddingApi;
 use metrics::start_metrics_server;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use middlewares::RequestSpan;
@@ -23,6 +24,7 @@ use tracing::{info, Span};
 use tracing_subscriber::EnvFilter;
 
 mod config;
+mod embeddings;
 mod errors;
 mod metrics;
 mod middlewares;
@@ -31,6 +33,7 @@ mod routes;
 #[derive(Clone)]
 pub struct AppState {
     auth_token: String,
+    embedding_api: EmbeddingApi,
     pool: Pool<Postgres>,
 }
 
@@ -143,8 +146,11 @@ async fn main() -> anyhow::Result<()> {
         .connect_with(opts)
         .await?;
 
+    let embedding_api = EmbeddingApi::new(config.model_api).await?;
+
     let state = AppState {
         auth_token: config.auth_token,
+        embedding_api,
         pool,
     };
 

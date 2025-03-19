@@ -5,10 +5,9 @@
 
 - [ ] do the following tasks for GH webhooks
 - [ ] do the following tasks for HF webhooks
-  - [ ] store issue / PR with its affiliated comments
-    - id should be: {owner}/{repo_name}/{number}
-  - [ ] on new comment or description edit, update values in db and (re)compute embedding
-  - [ ] on deletion, delete comment or issue/pr and update or remove embedding
+  - [x] store issue / PR with its affiliated comments
+  - [x] on new comment or description edit, update values in db and (re)compute embedding
+  - [x] on deletion, delete comment or issue/pr and update or remove embedding
 
 # Ideas
 

@@ -4,6 +4,16 @@ database:
   connection_string: postrgres://local:supersecurepassword@localhost:5432/lor_e
   max_connections: 5
 
+model_api:
+  auth_token: ""
+  url: ""
+
+model:
+  id: NovaSearch/stella_en_1.5B_v5
+  revision: main
+  embeddings_size: 1024
+  max_input_size: 131072
+
 server:
   ip: 0.0.0.0
   metrics_port: 4243

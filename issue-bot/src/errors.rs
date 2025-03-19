@@ -13,6 +13,8 @@ pub enum ApiError {
     Auth,
     #[error("auth error")]
     Axum(#[from] axum::Error),
+    #[error("embedding error: {0}")]
+    Embedding(#[from] crate::embeddings::EmbeddingError),
     #[error("hmac key invalid length")]
     Hmac(#[from] hmac::digest::InvalidLength),
     #[error("serde json error: {0}")]
@@ -33,6 +35,13 @@ impl IntoResponse for ApiError {
                 StatusCode::UNAUTHORIZED.to_string(),
             ),
             ApiError::Axum(err) => {
+                error!("{}", err);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
+            }
+            ApiError::Embedding(err) => {
                 error!("{}", err);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,

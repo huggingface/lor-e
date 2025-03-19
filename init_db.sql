@@ -2,6 +2,8 @@ CREATE DATABASE lor_e;
 
 \c lor_e;
 
+CREATE EXTENSION vector;
+
 CREATE TABLE IF NOT EXISTS issues (
   id SERIAL PRIMARY KEY,
   github_id BIGINT NOT NULL,
@@ -9,6 +11,7 @@ CREATE TABLE IF NOT EXISTS issues (
   body TEXT NOT NULL,
   issue_type VARCHAR NOT NULL CHECK (issue_type IN ('issue', 'pull_request')),
   url VARCHAR NOT NULL,
+  embedding vector(1024) NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
   updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
@@ -47,4 +50,5 @@ CREATE INDEX IF NOT EXISTS issues_github_id_idx ON issues (github_id);
 CREATE INDEX IF NOT EXISTS issue_comments_github_id_idx ON issue_comments (github_id);
 CREATE INDEX IF NOT EXISTS pull_request_reviews_github_id_idx ON pull_request_reviews (github_id);
 CREATE INDEX IF NOT EXISTS pull_request_review_comments_github_id_idx ON pull_request_review_comments (github_id);
+CREATE INDEX IF NOT EXISTS issues_embedding_hnsw_idx ON issues USING hnsw (embedding vector_cosine_ops);
 
