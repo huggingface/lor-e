@@ -11,13 +11,14 @@ use axum::{
 use chrono::Utc;
 use config::{load_config, IssueBotConfig, ServerConfig};
 use embeddings::inference_endpoints::EmbeddingApi;
+use github::GithubApi;
 use metrics::start_metrics_server;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use middlewares::RequestSpan;
 use pgvector::Vector;
-use serde::Deserialize;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
+    prelude::FromRow,
     Pool, Postgres,
 };
 use tokio::{
@@ -33,6 +34,7 @@ use tracing_subscriber::EnvFilter;
 mod config;
 mod embeddings;
 mod errors;
+mod github;
 mod metrics;
 mod middlewares;
 mod routes;
@@ -146,7 +148,9 @@ struct IssueData {
     title: String,
     body: String,
     is_pull_request: bool,
+    number: i32,
     url: String,
+    source: Source,
 }
 
 struct CommentData {
@@ -179,14 +183,22 @@ impl Display for Action {
     }
 }
 
-#[derive(Deserialize)]
-struct CommentBody {
-    body: String,
+enum Source {
+    Github,
+    Huggingface,
+}
+
+#[derive(FromRow)]
+struct ClosestIssue {
+    title: String,
+    number: i32,
+    url: String,
 }
 
 async fn handle_webhooks(
     mut rx: Receiver<WebhookData>,
     embedding_api: EmbeddingApi,
+    github_api: GithubApi,
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     while let Some(webhook_data) = rx.recv().await {
@@ -199,20 +211,44 @@ async fn handle_webhooks(
                         let issue_text = format!("# {}\n{}", issue.title, issue.body);
                         let embedding =
                             Vector::from(embedding_api.generate_embedding(issue_text).await?);
+
+                        let closest_issues: Vec<ClosestIssue> = sqlx::query_as(
+                            "select title, number, url from issues order by embedding <=> $1 LIMIT 3",
+                        )
+                            .bind(embedding.clone())
+                            .fetch_all(&pool)
+                            .await?;
+
+                        github_api
+                            .comment_on_issue(
+                                &issue.url,
+                                closest_issues
+                                    .into_iter()
+                                    .map(|r| ClosestIssue {
+                                        title: r.title,
+                                        number: r.number,
+                                        url: r.url,
+                                    })
+                                    .collect(),
+                            )
+                            .await?;
+
                         sqlx::query(
-                        r#"insert into issues (source_id, title, body, is_pull_request, url, embedding, created_at, updated_at)
-                           values ($1, $2, $3, $4, $5, $6, $7, $8)"#
+                        r#"insert into issues (source_id, title, body, is_pull_request, number, url, embedding, created_at, updated_at)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
                         )
                         .bind(issue.source_id)
                         .bind(issue.title)
                         .bind(issue.body)
                         .bind(issue.is_pull_request)
+                        .bind(issue.number)
                         .bind(issue.url)
                         .bind(embedding)
                         .bind(now)
                         .bind(now)
                         .execute(&pool)
                         .await?;
+
                         None
                     }
                     Action::Edited => {
@@ -295,7 +331,7 @@ async fn handle_webhooks(
                   i.title,
                   i.body,
                   (
-                    SELECT JSON_AGG(json_build_object('body', c.body))
+                    SELECT JSON_AGG(c.body)
                     FROM comments AS c
                     WHERE c.issue_id = i.id
                   ) AS comments
@@ -308,14 +344,12 @@ async fn handle_webhooks(
             )
             .fetch_one(&pool)
             .await?;
-            let comment_string = if let Some(comments) = issue.comments {
-                let comments: Vec<String> = serde_json::from_value::<Vec<CommentBody>>(comments)?
-                    .into_iter()
-                    .map(|b| b.body)
-                    .collect();
-                format!("\n----\nComment: {}", comments.join("\n----\nComment: "))
-            } else {
-                String::new()
+            let comment_string = match issue.comments {
+                Some(comments) => {
+                    let comments: Vec<String> = serde_json::from_value(comments)?;
+                    format!("\n----\nComment: {}", comments.join("\n----\nComment: "))
+                }
+                None => String::new(),
             };
             let issue_text = format!("# {}\n{}{}", issue.title, issue.body, comment_string);
             let embedding = Vector::from(embedding_api.generate_embedding(issue_text).await?);
@@ -346,6 +380,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let embedding_api = EmbeddingApi::new(config.model_api).await?;
+    let github_api = GithubApi::new(config.github_api)?;
 
     let (tx, rx) = mpsc::channel(4_096);
 
@@ -365,7 +400,7 @@ async fn main() -> anyhow::Result<()> {
             false,
             setup_metrics_recorder()
         ))),
-        handle_webhooks(rx, embedding_api, pool)
+        handle_webhooks(rx, embedding_api, github_api, pool)
     )?;
 
     Ok(())

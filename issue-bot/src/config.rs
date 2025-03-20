@@ -39,10 +39,16 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubApiConfig {
+    pub auth_token: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct IssueBotConfig {
     pub auth_token: String,
     pub database: DatabaseConfig,
+    pub github_api: GithubApiConfig,
     pub model_api: ModelApiConfig,
     pub server: ServerConfig,
 }

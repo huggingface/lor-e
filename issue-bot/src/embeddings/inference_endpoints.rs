@@ -1,6 +1,5 @@
-use axum::http::HeaderMap;
 use reqwest::{
-    header::{HeaderValue, AUTHORIZATION},
+    header::{HeaderMap, HeaderValue, AUTHORIZATION},
     Client,
 };
 use serde::Serialize;

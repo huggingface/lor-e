@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tracing::info;
 
-use crate::{errors::ApiError, Action, AppState, WebhookData};
+use crate::{errors::ApiError, Action, AppState, Source, WebhookData};
 
 fn compute_signature(payload: &[u8], secret: &str) -> String {
     let key = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
@@ -100,6 +100,7 @@ pub struct Issue {
 pub struct IssueData {
     body: String,
     id: i64,
+    number: i32,
     title: String,
     url: String,
 }
@@ -122,6 +123,7 @@ pub struct PullRequest {
 pub struct PullRequestData {
     body: String,
     id: i64,
+    number: i32,
     title: String,
     url: String,
 }
@@ -203,7 +205,9 @@ pub async fn github_webhook(
                             title: issue.issue.title,
                             body: issue.issue.body,
                             is_pull_request: false,
+                            number: issue.issue.number,
                             url: issue.issue.url,
+                            source: Source::Github,
                         }))
                         .await?
                 }
@@ -216,7 +220,9 @@ pub async fn github_webhook(
                             title: issue.issue.title,
                             body: issue.issue.body,
                             is_pull_request: false,
+                            number: issue.issue.number,
                             url: issue.issue.url,
+                            source: Source::Github,
                         }))
                         .await?
                 }
@@ -231,7 +237,9 @@ pub async fn github_webhook(
                             title: issue.issue.title,
                             body: issue.issue.body,
                             is_pull_request: false,
+                            number: issue.issue.number,
                             url: issue.issue.url,
+                            source: Source::Github,
                         }))
                         .await?
                 }
@@ -291,7 +299,9 @@ pub async fn github_webhook(
                             title: pr.pull_request.title,
                             body: pr.pull_request.body,
                             is_pull_request: true,
+                            number: pr.pull_request.number,
                             url: pr.pull_request.url,
+                            source: Source::Github,
                         }))
                         .await?
                 }
@@ -304,7 +314,9 @@ pub async fn github_webhook(
                             title: pr.pull_request.title,
                             body: pr.pull_request.body,
                             is_pull_request: true,
+                            number: pr.pull_request.number,
                             url: pr.pull_request.url,
+                            source: Source::Github,
                         }))
                         .await?
                 }
