@@ -7,14 +7,12 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use chrono::Utc;
 use hmac::{Hmac, Mac};
-use pgvector::Vector;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tracing::info;
 
-use crate::{errors::ApiError, AppState};
+use crate::{errors::ApiError, Action, AppState, WebhookData};
 
 fn compute_signature(payload: &[u8], secret: &str) -> String {
     let key = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
@@ -172,11 +170,6 @@ impl Display for GithubWebhook {
     }
 }
 
-#[derive(Deserialize)]
-struct CommentBody {
-    body: String,
-}
-
 pub async fn github_webhook(
     State(state): State<AppState>,
     req: Request<Body>,
@@ -196,275 +189,199 @@ pub async fn github_webhook(
     }
 
     let webhook = serde_json::from_slice::<GithubWebhook>(&body_bytes)?;
-    let now = Utc::now();
     let webhook_type = webhook.to_string();
-    let mut issue_id: Option<i64> = None;
     match webhook {
         GithubWebhook::Issue(issue) => {
-            info!("handling {} (state: {})", webhook_type, issue.action);
+            info!("received {} (state: {})", webhook_type, issue.action);
             match issue.action {
                 IssueActionType::Opened => {
-                    let issue_text = format!("# {}\n{}", issue.issue.title, issue.issue.body);
-                    let embedding =
-                        Vector::from(state.embedding_api.generate_embedding(issue_text).await?);
-                    sqlx::query(
-                        r#"insert into issues (github_id, title, body, issue_type, url, embedding, created_at, updated_at)
-                           values ($1, $2, $3, $4, $5, $6, $7, $8)"#
-                    )
-                    .bind(issue.issue.id)
-                    .bind(issue.issue.title)
-                    .bind(issue.issue.body)
-                    .bind("issue")
-                    .bind(issue.issue.url)
-                    .bind(embedding)
-                    .bind(now)
-                    .bind(now)
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Issue(crate::IssueData {
+                            source_id: issue.issue.id.to_string(),
+                            action: Action::Created,
+                            title: issue.issue.title,
+                            body: issue.issue.body,
+                            is_pull_request: false,
+                            url: issue.issue.url,
+                        }))
+                        .await?
                 }
                 IssueActionType::Edited => {
-                    issue_id = Some(issue.issue.id);
-                    sqlx::query!(
-                        r#"update issues
-                           set title = $1, body = $2, url = $3, updated_at = $4
-                           where github_id = $5"#,
-                        issue.issue.title,
-                        issue.issue.body,
-                        issue.issue.url,
-                        now,
-                        issue.issue.id,
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Issue(crate::IssueData {
+                            source_id: issue.issue.id.to_string(),
+                            action: Action::Edited,
+                            title: issue.issue.title,
+                            body: issue.issue.body,
+                            is_pull_request: false,
+                            url: issue.issue.url,
+                        }))
+                        .await?
                 }
+
                 // FIXME: delete associated comments, reviews & review comments
                 IssueActionType::Deleted => {
-                    sqlx::query!(r#"DELETE FROM issues WHERE github_id = $1"#, issue.issue.id)
-                        .execute(&state.pool)
-                        .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Issue(crate::IssueData {
+                            source_id: issue.issue.id.to_string(),
+                            action: Action::Deleted,
+                            title: issue.issue.title,
+                            body: issue.issue.body,
+                            is_pull_request: false,
+                            url: issue.issue.url,
+                        }))
+                        .await?
                 }
                 IssueActionType::Ignored => (),
             }
         }
         GithubWebhook::IssueComment(comment) => {
-            info!("handling {} (state: {})", webhook_type, comment.action);
+            info!("received {} (state: {})", webhook_type, comment.action);
             match comment.action {
                 CommentActionType::Created => {
-                    issue_id = Some(comment.issue.id);
-                    sqlx::query!(
-                        r#"insert into issue_comments (github_id, body, url, created_at, updated_at, issue_id)
-                           values ($1, $2, $3, $4, $5,
-                                  (select id from issues where github_id = $6))"#,
-                        comment.comment.id,
-                        comment.comment.body,
-                        comment.comment.url,
-                        now,
-                        now,
-                        comment.issue.id,
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Comment(crate::CommentData {
+                            source_id: comment.comment.id.to_string(),
+                            issue_id: comment.issue.id.to_string(),
+                            action: Action::Created,
+                            body: comment.comment.body,
+                            url: comment.comment.url,
+                        }))
+                        .await?
                 }
                 CommentActionType::Edited => {
-                    issue_id = Some(comment.issue.id);
-                    sqlx::query!(
-                        r#"update issue_comments
-                           set body = $1, url = $2, updated_at = $3
-                           where github_id = $4"#,
-                        comment.comment.body,
-                        comment.comment.url,
-                        now,
-                        comment.comment.id,
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Comment(crate::CommentData {
+                            source_id: comment.comment.id.to_string(),
+                            issue_id: comment.issue.id.to_string(),
+                            action: Action::Edited,
+                            body: comment.comment.body,
+                            url: comment.comment.url,
+                        }))
+                        .await?
                 }
                 CommentActionType::Deleted => {
-                    issue_id = Some(comment.issue.id);
-                    sqlx::query!(
-                        r#"DELETE FROM issue_comments WHERE github_id = $1"#,
-                        comment.comment.id
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Comment(crate::CommentData {
+                            source_id: comment.comment.id.to_string(),
+                            issue_id: comment.issue.id.to_string(),
+                            action: Action::Deleted,
+                            body: comment.comment.body,
+                            url: comment.comment.url,
+                        }))
+                        .await?
                 }
             }
         }
         GithubWebhook::PullRequest(pr) => {
-            info!("handling {} (state: {})", webhook_type, pr.action);
+            info!("received {} (state: {})", webhook_type, pr.action);
             match pr.action {
                 PullRequestActionType::Opened => {
-                    issue_id = Some(pr.pull_request.id);
-                    sqlx::query!(
-                        r#"insert into issues (github_id, title, body, issue_type, url, created_at, updated_at)
-                           values ($1, $2, $3, $4, $5, $6, $7)"#,
-                        pr.pull_request.id,
-                        pr.pull_request.title,
-                        pr.pull_request.body,
-                        "pull_request",
-                        pr.pull_request.url,
-                        now,
-                        now
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Issue(crate::IssueData {
+                            source_id: pr.pull_request.id.to_string(),
+                            action: Action::Created,
+                            title: pr.pull_request.title,
+                            body: pr.pull_request.body,
+                            is_pull_request: true,
+                            url: pr.pull_request.url,
+                        }))
+                        .await?
                 }
                 PullRequestActionType::Edited => {
-                    issue_id = Some(pr.pull_request.id);
-                    sqlx::query!(
-                        r#"update issues
-                           set title = $1, body = $2, url = $3, updated_at = $4
-                           where github_id = $5"#,
-                        pr.pull_request.title,
-                        pr.pull_request.body,
-                        pr.pull_request.url,
-                        now,
-                        pr.pull_request.id,
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Issue(crate::IssueData {
+                            source_id: pr.pull_request.id.to_string(),
+                            action: Action::Edited,
+                            title: pr.pull_request.title,
+                            body: pr.pull_request.body,
+                            is_pull_request: true,
+                            url: pr.pull_request.url,
+                        }))
+                        .await?
                 }
                 PullRequestActionType::Ignored => (),
             }
         }
         GithubWebhook::PullRequestReview(review) => {
-            info!("handling {} (state: {})", webhook_type, review.action);
+            info!("received {} (state: {})", webhook_type, review.action);
             match review.action {
                 ReviewActionType::Submitted => {
-                    issue_id = Some(review.pull_request.id);
-                    sqlx::query!(
-                        r#"insert into pull_request_reviews (github_id, body, url, created_at, updated_at, issue_id)
-                           values ($1, $2, $3, $4, $5,
-                                  (select id from issues where github_id = $6))"#,
-                        review.review.id,
-                        review.review.body,
-                        review.review.url,
-                        now,
-                        now,
-                        review.pull_request.id,
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Comment(crate::CommentData {
+                            source_id: review.review.id.to_string(),
+                            issue_id: review.pull_request.id.to_string(),
+                            action: Action::Created,
+                            body: review.review.body,
+                            url: review.review.url,
+                        }))
+                        .await?
                 }
                 ReviewActionType::Edited => {
-                    issue_id = Some(review.pull_request.id);
-                    sqlx::query!(
-                        r#"update pull_request_reviews
-                           set body = $1, url = $2, updated_at = $3
-                           where github_id = $4"#,
-                        review.review.body,
-                        review.review.url,
-                        now,
-                        review.review.id,
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Comment(crate::CommentData {
+                            source_id: review.review.id.to_string(),
+                            issue_id: review.pull_request.id.to_string(),
+                            action: Action::Edited,
+                            body: review.review.body,
+                            url: review.review.url,
+                        }))
+                        .await?
                 }
                 ReviewActionType::Dismissed => (),
             }
         }
         GithubWebhook::PullRequestReviewComment(comment) => {
-            info!("handling {} (state: {})", webhook_type, comment.action);
+            info!("received {} (state: {})", webhook_type, comment.action);
             match comment.action {
                 CommentActionType::Created => {
-                    issue_id = Some(comment.pull_request.id);
-                    sqlx::query!(
-                        r#"insert into pull_request_review_comments (github_id, body, url, created_at, updated_at, issue_id)
-                           values ($1, $2, $3, $4, $5,
-                                  (select id from issues where github_id = $6))"#,
-                        comment.comment.id,
-                        comment.comment.body,
-                        comment.comment.url,
-                        now,
-                        now,
-                        comment.pull_request.id,
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Comment(crate::CommentData {
+                            source_id: comment.comment.id.to_string(),
+                            issue_id: comment.pull_request.id.to_string(),
+                            action: Action::Created,
+                            body: comment.comment.body,
+                            url: comment.comment.url,
+                        }))
+                        .await?
                 }
                 CommentActionType::Edited => {
-                    issue_id = Some(comment.pull_request.id);
-                    sqlx::query!(
-                        r#"update pull_request_review_comments
-                           set body = $1, url = $2, updated_at = $3
-                           where github_id = $4"#,
-                        comment.comment.body,
-                        comment.comment.url,
-                        now,
-                        comment.comment.id,
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Comment(crate::CommentData {
+                            source_id: comment.comment.id.to_string(),
+                            issue_id: comment.pull_request.id.to_string(),
+                            action: Action::Edited,
+                            body: comment.comment.body,
+                            url: comment.comment.url,
+                        }))
+                        .await?
                 }
                 CommentActionType::Deleted => {
-                    issue_id = Some(comment.pull_request.id);
-                    sqlx::query!(
-                        r#"DELETE FROM pull_request_review_comments WHERE github_id = $1"#,
-                        comment.comment.id
-                    )
-                    .execute(&state.pool)
-                    .await?;
+                    state
+                        .tx
+                        .send(WebhookData::Comment(crate::CommentData {
+                            source_id: comment.comment.id.to_string(),
+                            issue_id: comment.pull_request.id.to_string(),
+                            action: Action::Deleted,
+                            body: comment.comment.body,
+                            url: comment.comment.url,
+                        }))
+                        .await?
                 }
             }
         }
-    }
-
-    if let Some(issue_id) = issue_id {
-        let issue = sqlx::query!(
-            r#"
-                SELECT
-                  i.title,
-                  i.body,
-                  (
-                    SELECT JSON_AGG(json_build_object('body', ic.body))
-                    FROM issue_comments AS ic
-                    WHERE ic.issue_id = i.id
-                  ) AS issue_comments,
-                  (
-                    SELECT JSON_AGG(json_build_object('body', prr.body))
-                    FROM pull_request_reviews AS prr
-                    WHERE prr.issue_id = i.id
-                  ) AS pull_request_reviews,
-                  (
-                    SELECT JSON_AGG(json_build_object('body', prrc.body))
-                    FROM pull_request_review_comments AS prrc
-                    WHERE prrc.issue_id = i.id
-                  ) AS pull_request_review_comments
-                FROM
-                  issues AS i
-                WHERE
-                  i.github_id = $1;
-            "#,
-            issue_id,
-        )
-        .fetch_one(&state.pool)
-        .await?;
-        let comment_string = [
-            issue.issue_comments,
-            issue.pull_request_reviews,
-            issue.pull_request_review_comments,
-        ]
-        .into_iter()
-        .flat_map(|opt| opt.map(serde_json::from_value::<Vec<CommentBody>>))
-        .flatten()
-        .flatten()
-        .map(|b| b.body)
-        .collect::<Vec<String>>()
-        .join("\n----\nComment: ");
-        let issue_text = format!(
-            "# {}\n{}\n----\nComment: {}",
-            issue.title, issue.body, comment_string
-        );
-        let embedding = Vector::from(state.embedding_api.generate_embedding(issue_text).await?);
-        sqlx::query(
-            r#"update issues
-               set embedding = $1
-               where github_id = $2"#,
-        )
-        .bind(embedding)
-        .bind(issue_id)
-        .execute(&state.pool)
-        .await?;
     }
 
     Ok(())
@@ -525,24 +442,22 @@ mod tests {
         body::Body,
         http::{header::CONTENT_TYPE, Request, StatusCode},
     };
-    use sqlx::{Pool, Postgres};
+    use tokio::sync::mpsc;
     use tower::ServiceExt;
 
     use crate::{
         app,
         config::{load_config, IssueBotConfig},
-        embeddings::inference_endpoints::EmbeddingApi,
         AppState,
     };
 
-    #[sqlx::test(fixtures("lor_e"))]
-    async fn test_github_webhook_handler(pool: Pool<Postgres>) {
+    #[tokio::test]
+    async fn test_github_webhook_handler() {
         let config: IssueBotConfig = load_config("ISSUE_BOT_TEST").unwrap();
-        let embedding_api = EmbeddingApi::new(config.model_api).await.unwrap();
+        let (tx, _rx) = mpsc::channel(8);
         let state = AppState {
             auth_token: config.auth_token.clone(),
-            embedding_api,
-            pool,
+            tx,
         };
         let mut app = app(state);
         let payload_body = r#"{"action":"opened","pull_request":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"url":"https://github.com/huggingface/lor-e/5"}}"#;
@@ -582,15 +497,14 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    #[sqlx::test]
-    async fn test_hf_webhook_handler(pool: Pool<Postgres>) {
+    #[tokio::test]
+    async fn test_hf_webhook_handler() {
         let config: IssueBotConfig = load_config("ISSUE_BOT_TEST").unwrap();
-        let embedding_api = EmbeddingApi::new(config.model_api).await.unwrap();
         let auth_token = config.auth_token.clone();
+        let (tx, _) = mpsc::channel(8);
         let state = AppState {
             auth_token: auth_token.clone(),
-            embedding_api,
-            pool,
+            tx,
         };
         let app = app(state);
         let payload_body = r#"{"tmp":"bob"}"#;

@@ -1,4 +1,4 @@
-use std::{env, sync::Once, time::Duration};
+use std::{env, fmt::Display, sync::Once, time::Duration};
 
 use axum::{
     error_handling::HandleErrorLayer,
@@ -8,16 +8,23 @@ use axum::{
     routing::get,
     Router,
 };
+use chrono::Utc;
 use config::{load_config, IssueBotConfig, ServerConfig};
 use embeddings::inference_endpoints::EmbeddingApi;
 use metrics::start_metrics_server;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use middlewares::RequestSpan;
+use pgvector::Vector;
+use serde::Deserialize;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     Pool, Postgres,
 };
-use tokio::{net::TcpListener, task::JoinHandle};
+use tokio::{
+    net::TcpListener,
+    sync::mpsc::{self, Receiver, Sender},
+    task::JoinHandle,
+};
 use tower::{BoxError, ServiceBuilder};
 use tower_http::trace::TraceLayer;
 use tracing::{info, Span};
@@ -33,8 +40,7 @@ mod routes;
 #[derive(Clone)]
 pub struct AppState {
     auth_token: String,
-    embedding_api: EmbeddingApi,
-    pool: Pool<Postgres>,
+    tx: Sender<WebhookData>,
 }
 
 fn setup_metrics_recorder() -> PrometheusHandle {
@@ -134,6 +140,199 @@ async fn start_main_server(config: ServerConfig, state: AppState) -> anyhow::Res
     Ok(())
 }
 
+struct IssueData {
+    source_id: String,
+    action: Action,
+    title: String,
+    body: String,
+    is_pull_request: bool,
+    url: String,
+}
+
+struct CommentData {
+    source_id: String,
+    action: Action,
+    issue_id: String,
+    body: String,
+    url: String,
+}
+
+enum WebhookData {
+    Issue(IssueData),
+    Comment(CommentData),
+}
+
+enum Action {
+    Created,
+    Edited,
+    Deleted,
+}
+
+impl Display for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let action = match self {
+            Self::Created => "created",
+            Self::Edited => "edited",
+            Self::Deleted => "deleted",
+        };
+        write!(f, "{}", action)
+    }
+}
+
+#[derive(Deserialize)]
+struct CommentBody {
+    body: String,
+}
+
+async fn handle_webhooks(
+    mut rx: Receiver<WebhookData>,
+    embedding_api: EmbeddingApi,
+    pool: Pool<Postgres>,
+) -> anyhow::Result<()> {
+    while let Some(webhook_data) = rx.recv().await {
+        let now = Utc::now();
+        let issue_id = match webhook_data {
+            WebhookData::Issue(issue) => {
+                info!("handling issue (state: {})", issue.action);
+                match issue.action {
+                    Action::Created => {
+                        let issue_text = format!("# {}\n{}", issue.title, issue.body);
+                        let embedding =
+                            Vector::from(embedding_api.generate_embedding(issue_text).await?);
+                        sqlx::query(
+                        r#"insert into issues (source_id, title, body, is_pull_request, url, embedding, created_at, updated_at)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8)"#
+                        )
+                        .bind(issue.source_id)
+                        .bind(issue.title)
+                        .bind(issue.body)
+                        .bind(issue.is_pull_request)
+                        .bind(issue.url)
+                        .bind(embedding)
+                        .bind(now)
+                        .bind(now)
+                        .execute(&pool)
+                        .await?;
+                        None
+                    }
+                    Action::Edited => {
+                        sqlx::query!(
+                            r#"update issues
+                           set title = $1, body = $2, url = $3, updated_at = $4
+                           where source_id = $5"#,
+                            issue.title,
+                            issue.body,
+                            issue.url,
+                            now,
+                            issue.source_id,
+                        )
+                        .execute(&pool)
+                        .await?;
+                        Some(issue.source_id)
+                    }
+                    // FIXME: delete associated comments, reviews & review comments
+                    Action::Deleted => {
+                        sqlx::query!(
+                            r#"DELETE FROM issues WHERE source_id = $1"#,
+                            issue.source_id
+                        )
+                        .execute(&pool)
+                        .await?;
+                        None
+                    }
+                }
+            }
+            WebhookData::Comment(comment) => {
+                info!("handling comment (state: {})", comment.action);
+                match comment.action {
+                    Action::Created => {
+                        sqlx::query!(
+                            r#"insert into comments (source_id, body, url, created_at, updated_at, issue_id)
+                               values ($1, $2, $3, $4, $5,
+                                      (select id from issues where source_id = $6))"#,
+                            comment.source_id,
+                            comment.body,
+                            comment.url,
+                            now,
+                            now,
+                            comment.issue_id,
+                        )
+                        .execute(&pool)
+                        .await?;
+                        Some(comment.issue_id)
+                    }
+                    Action::Edited => {
+                        sqlx::query!(
+                            r#"update comments
+                           set body = $1, url = $2, updated_at = $3
+                           where source_id = $4"#,
+                            comment.body,
+                            comment.url,
+                            now,
+                            comment.source_id,
+                        )
+                        .execute(&pool)
+                        .await?;
+                        Some(comment.issue_id)
+                    }
+                    Action::Deleted => {
+                        sqlx::query!(
+                            r#"DELETE FROM comments WHERE source_id = $1"#,
+                            comment.source_id
+                        )
+                        .execute(&pool)
+                        .await?;
+                        Some(comment.issue_id)
+                    }
+                }
+            }
+        };
+
+        if let Some(issue_id) = issue_id {
+            let issue = sqlx::query!(
+                r#"
+                SELECT
+                  i.title,
+                  i.body,
+                  (
+                    SELECT JSON_AGG(json_build_object('body', c.body))
+                    FROM comments AS c
+                    WHERE c.issue_id = i.id
+                  ) AS comments
+                FROM
+                  issues AS i
+                WHERE
+                  i.source_id = $1;
+            "#,
+                issue_id,
+            )
+            .fetch_one(&pool)
+            .await?;
+            let comment_string = if let Some(comments) = issue.comments {
+                let comments: Vec<String> = serde_json::from_value::<Vec<CommentBody>>(comments)?
+                    .into_iter()
+                    .map(|b| b.body)
+                    .collect();
+                format!("\n----\nComment: {}", comments.join("\n----\nComment: "))
+            } else {
+                String::new()
+            };
+            let issue_text = format!("# {}\n{}{}", issue.title, issue.body, comment_string);
+            let embedding = Vector::from(embedding_api.generate_embedding(issue_text).await?);
+            sqlx::query(
+                r#"update issues
+               set embedding = $1
+               where source_id = $2"#,
+            )
+            .bind(embedding)
+            .bind(issue_id)
+            .execute(&pool)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_logging();
@@ -148,10 +347,11 @@ async fn main() -> anyhow::Result<()> {
 
     let embedding_api = EmbeddingApi::new(config.model_api).await?;
 
+    let (tx, rx) = mpsc::channel(4_096);
+
     let state = AppState {
         auth_token: config.auth_token,
-        embedding_api,
-        pool,
+        tx,
     };
 
     let host = config.server.ip.clone();
@@ -164,7 +364,8 @@ async fn main() -> anyhow::Result<()> {
             metrics_port,
             false,
             setup_metrics_recorder()
-        )))
+        ))),
+        handle_webhooks(rx, embedding_api, pool)
     )?;
 
     Ok(())

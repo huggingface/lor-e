@@ -6,19 +6,19 @@ CREATE EXTENSION vector;
 
 CREATE TABLE IF NOT EXISTS issues (
   id SERIAL PRIMARY KEY,
-  github_id BIGINT NOT NULL,
+  source_id VARCHAR NOT NULL,
   title TEXT NOT NULL,
   body TEXT NOT NULL,
-  issue_type VARCHAR NOT NULL CHECK (issue_type IN ('issue', 'pull_request')),
+  is_pull_request BOOLEAN NOT NULL,
   url VARCHAR NOT NULL,
   embedding vector(1024) NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
   updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
 
-CREATE TABLE IF NOT EXISTS issue_comments (
+CREATE TABLE IF NOT EXISTS comments (
   id SERIAL PRIMARY KEY,
-  github_id BIGINT NOT NULL,
+  source_id VARCHAR NOT NULL,
   issue_id INT NOT NULL REFERENCES issues(id),
   body TEXT NOT NULL,
   url VARCHAR NOT NULL,
@@ -26,29 +26,7 @@ CREATE TABLE IF NOT EXISTS issue_comments (
   updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
 
-CREATE TABLE IF NOT EXISTS pull_request_reviews (
-  id SERIAL PRIMARY KEY,
-  github_id BIGINT NOT NULL,
-  issue_id INT NOT NULL REFERENCES issues(id),
-  body TEXT NOT NULL,
-  url VARCHAR NOT NULL,
-  created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
-  updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
-);
-
-CREATE TABLE IF NOT EXISTS pull_request_review_comments (
-  id SERIAL PRIMARY KEY,
-  github_id BIGINT NOT NULL,
-  issue_id INT NOT NULL REFERENCES issues(id),
-  body TEXT NOT NULL,
-  url VARCHAR NOT NULL,
-  created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
-  updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
-);
-
-CREATE INDEX IF NOT EXISTS issues_github_id_idx ON issues (github_id);
-CREATE INDEX IF NOT EXISTS issue_comments_github_id_idx ON issue_comments (github_id);
-CREATE INDEX IF NOT EXISTS pull_request_reviews_github_id_idx ON pull_request_reviews (github_id);
-CREATE INDEX IF NOT EXISTS pull_request_review_comments_github_id_idx ON pull_request_review_comments (github_id);
+CREATE INDEX IF NOT EXISTS issues_source_id_idx ON issues (source_id);
+CREATE INDEX IF NOT EXISTS comments_source_id_idx ON comments (source_id);
 CREATE INDEX IF NOT EXISTS issues_embedding_hnsw_idx ON issues USING hnsw (embedding vector_cosine_ops);
 

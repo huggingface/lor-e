@@ -7,6 +7,8 @@ use serde_json::json;
 use thiserror::Error;
 use tracing::error;
 
+use crate::WebhookData;
+
 #[derive(Debug, Error)]
 pub enum ApiError {
     #[error("auth error")]
@@ -17,6 +19,8 @@ pub enum ApiError {
     Embedding(#[from] crate::embeddings::EmbeddingError),
     #[error("hmac key invalid length")]
     Hmac(#[from] hmac::digest::InvalidLength),
+    #[error("send error: {0}")]
+    Send(#[from] tokio::sync::mpsc::error::SendError<WebhookData>),
     #[error("serde json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
     #[error("signatures don't match")]
@@ -50,6 +54,13 @@ impl IntoResponse for ApiError {
             }
             ApiError::Hmac(err) => {
                 error!("{}", err);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
+            }
+            ApiError::Send(err) => {
+                error!("failed to send to background thread: {}", err);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal server error".to_string(),
