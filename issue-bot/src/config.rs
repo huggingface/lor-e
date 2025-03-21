@@ -39,9 +39,30 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct GithubApiConfig {
     pub auth_token: String,
+}
+
+/// bot's comment message
+/// will be of the form:
+/// ```
+/// format!("{}{}{}", message_config.pre, closest_issues, message_config.post);
+/// ```
+/// Which gives something like this:
+/// ```txt
+/// Hello!
+///
+/// A maintainer will soon take a look, in the meantime you might find these related issues interesting:
+/// - Test issue (#29)
+/// - Another issue (#30)
+///
+/// Thank you for opening this issue!
+/// ```
+#[derive(Debug, Deserialize)]
+pub struct MessageConfig {
+    pub pre: String,
+    pub post: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +70,7 @@ pub struct IssueBotConfig {
     pub auth_token: String,
     pub database: DatabaseConfig,
     pub github_api: GithubApiConfig,
+    pub message_config: MessageConfig,
     pub model_api: ModelApiConfig,
     pub server: ServerConfig,
 }

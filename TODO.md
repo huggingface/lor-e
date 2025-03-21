@@ -12,7 +12,7 @@
 
 - [ ] move to github app
 
-- [ ] make bot message configurable (from env / config file)
+- [x] make bot message configurable (from env / config file)
 
 - [ ] make sure issue is not re-indexed with the bot's messages
 

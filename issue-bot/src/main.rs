@@ -382,7 +382,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let embedding_api = EmbeddingApi::new(config.model_api).await?;
-    let github_api = GithubApi::new(config.github_api)?;
+    let github_api = GithubApi::new(config.github_api, config.message_config)?;
 
     let (tx, rx) = mpsc::channel(4_096);
 

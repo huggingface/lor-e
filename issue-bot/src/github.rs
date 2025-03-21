@@ -5,7 +5,10 @@ use reqwest::{
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::{config::GithubApiConfig, ClosestIssue};
+use crate::{
+    config::{GithubApiConfig, MessageConfig},
+    ClosestIssue,
+};
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
@@ -24,10 +27,14 @@ struct CommentBody {
 
 pub struct GithubApi {
     client: Client,
+    message_config: MessageConfig,
 }
 
 impl GithubApi {
-    pub fn new(cfg: GithubApiConfig) -> Result<Self, GithubApiError> {
+    pub fn new(
+        cfg: GithubApiConfig,
+        message_config: MessageConfig,
+    ) -> Result<Self, GithubApiError> {
         let mut headers = HeaderMap::new();
         let mut auth_value = HeaderValue::from_str(&format!("Bearer {}", cfg.auth_token))?;
         auth_value.set_sensitive(true);
@@ -42,7 +49,10 @@ impl GithubApi {
             .default_headers(headers)
             .build()?;
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            message_config,
+        })
     }
 
     pub async fn comment_on_issue(
@@ -51,12 +61,16 @@ impl GithubApi {
         closest_issues: Vec<ClosestIssue>,
     ) -> Result<(), GithubApiError> {
         let comment_url = format!("{issue_url}/comments");
-        let pre = "Hello! Thank you for opening this issue.\n\nA maintainer will soon take a look, in the meantime you might find these related issues interesting:\n";
         let issues: Vec<String> = closest_issues
             .into_iter()
             .map(|i| format!("- {} ([#{}]({}))", i.title, i.number, i.html_url))
             .collect();
-        let body = format!("{pre}{}", issues.join("\n"));
+        let body = format!(
+            "{}{}{}",
+            self.message_config.pre,
+            issues.join("\n"),
+            self.message_config.post
+        );
         self.client
             .post(comment_url)
             .json(&CommentBody { body })
