@@ -2,7 +2,7 @@
 
 - [x] on open PR/issue event, do retrieval and suggest 3/5 closest issues / prs
 
-- [ ] do the following tasks for GH webhooks
+- [x] do the following tasks for GH webhooks
 - [ ] do the following tasks for HF webhooks
   - [x] store issue / PR with its affiliated comments
   - [x] on new comment or description edit, update values in db and (re)compute embedding
@@ -16,7 +16,7 @@
 
 - [ ] make sure issue is not re-indexed with the bot's messages
 
-- [ ] fix github issue link (currently `api.github.com` instead of the regular github UI url)
+- [x] fix github issue link (currently `api.github.com` instead of the regular github UI url)
 
 # Ideas
 

@@ -99,6 +99,7 @@ pub struct Issue {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct IssueData {
     body: String,
+    html_url: String,
     id: i64,
     number: i32,
     title: String,
@@ -122,6 +123,7 @@ pub struct PullRequest {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PullRequestData {
     body: String,
+    html_url: String,
     id: i64,
     number: i32,
     title: String,
@@ -206,6 +208,7 @@ pub async fn github_webhook(
                             body: issue.issue.body,
                             is_pull_request: false,
                             number: issue.issue.number,
+                            html_url: issue.issue.html_url,
                             url: issue.issue.url,
                             source: Source::Github,
                         }))
@@ -221,6 +224,7 @@ pub async fn github_webhook(
                             body: issue.issue.body,
                             is_pull_request: false,
                             number: issue.issue.number,
+                            html_url: issue.issue.html_url,
                             url: issue.issue.url,
                             source: Source::Github,
                         }))
@@ -238,6 +242,7 @@ pub async fn github_webhook(
                             body: issue.issue.body,
                             is_pull_request: false,
                             number: issue.issue.number,
+                            html_url: issue.issue.html_url,
                             url: issue.issue.url,
                             source: Source::Github,
                         }))
@@ -300,6 +305,7 @@ pub async fn github_webhook(
                             body: pr.pull_request.body,
                             is_pull_request: true,
                             number: pr.pull_request.number,
+                            html_url: pr.pull_request.html_url,
                             url: pr.pull_request.url,
                             source: Source::Github,
                         }))
@@ -315,6 +321,7 @@ pub async fn github_webhook(
                             body: pr.pull_request.body,
                             is_pull_request: true,
                             number: pr.pull_request.number,
+                            html_url: pr.pull_request.html_url,
                             url: pr.pull_request.url,
                             source: Source::Github,
                         }))

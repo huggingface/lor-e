@@ -149,6 +149,7 @@ struct IssueData {
     body: String,
     is_pull_request: bool,
     number: i32,
+    html_url: String,
     url: String,
     source: Source,
 }
@@ -192,7 +193,7 @@ enum Source {
 struct ClosestIssue {
     title: String,
     number: i32,
-    url: String,
+    html_url: String,
 }
 
 async fn handle_webhooks(
@@ -213,7 +214,7 @@ async fn handle_webhooks(
                             Vector::from(embedding_api.generate_embedding(issue_text).await?);
 
                         let closest_issues: Vec<ClosestIssue> = sqlx::query_as(
-                            "select title, number, url from issues order by embedding <=> $1 LIMIT 3",
+                            "select title, number, html_url from issues order by embedding <=> $1 LIMIT 3",
                         )
                             .bind(embedding.clone())
                             .fetch_all(&pool)
@@ -227,21 +228,22 @@ async fn handle_webhooks(
                                     .map(|r| ClosestIssue {
                                         title: r.title,
                                         number: r.number,
-                                        url: r.url,
+                                        html_url: r.html_url,
                                     })
                                     .collect(),
                             )
                             .await?;
 
                         sqlx::query(
-                        r#"insert into issues (source_id, title, body, is_pull_request, number, url, embedding, created_at, updated_at)
-                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+                        r#"insert into issues (source_id, title, body, is_pull_request, number, html_url, url, embedding, created_at, updated_at)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
                         )
                         .bind(issue.source_id)
                         .bind(issue.title)
                         .bind(issue.body)
                         .bind(issue.is_pull_request)
                         .bind(issue.number)
+                        .bind(issue.html_url)
                         .bind(issue.url)
                         .bind(embedding)
                         .bind(now)

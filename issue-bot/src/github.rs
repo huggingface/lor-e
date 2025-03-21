@@ -54,7 +54,7 @@ impl GithubApi {
         let pre = "Hello! Thank you for opening this issue.\n\nA maintainer will soon take a look, in the meantime you might find these related issues interesting:\n";
         let issues: Vec<String> = closest_issues
             .into_iter()
-            .map(|i| format!("- {} ([#{}]({}))", i.title, i.number, i.url))
+            .map(|i| format!("- {} ([#{}]({}))", i.title, i.number, i.html_url))
             .collect();
         let body = format!("{pre}{}", issues.join("\n"));
         self.client

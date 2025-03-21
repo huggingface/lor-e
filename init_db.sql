@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS issues (
   body TEXT NOT NULL,
   is_pull_request BOOLEAN NOT NULL,
   number INT NOT NULL,
+  html_url VARCHAR NOT NULL,
   url VARCHAR NOT NULL,
   embedding vector(1024) NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
