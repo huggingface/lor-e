@@ -19,6 +19,8 @@ pub enum ApiError {
     Embedding(#[from] crate::embeddings::EmbeddingError),
     #[error("hmac key invalid length")]
     Hmac(#[from] hmac::digest::InvalidLength),
+    #[error("malformed webhook: {0}")]
+    MalformedWebhook(String),
     #[error("send error: {0}")]
     Send(#[from] tokio::sync::mpsc::error::SendError<WebhookData>),
     #[error("serde json error: {0}")]
@@ -58,6 +60,10 @@ impl IntoResponse for ApiError {
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal server error".to_string(),
                 )
+            }
+            ApiError::MalformedWebhook(err) => {
+                error!("{}", err);
+                (StatusCode::BAD_REQUEST, "Bad request".to_string())
             }
             ApiError::Send(err) => {
                 error!("failed to send to background thread: {}", err);

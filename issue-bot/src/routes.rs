@@ -24,10 +24,20 @@ fn compute_signature(payload: &[u8], secret: &str) -> String {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CommentActionType {
+enum CommentActionType {
     Created,
     Deleted,
     Edited,
+}
+
+impl CommentActionType {
+    fn to_action(&self) -> Action {
+        match self {
+            Self::Created => Action::Created,
+            Self::Edited => Action::Edited,
+            Self::Deleted => Action::Deleted,
+        }
+    }
 }
 
 impl Display for CommentActionType {
@@ -38,10 +48,19 @@ impl Display for CommentActionType {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ReviewActionType {
+enum ReviewActionType {
     Dismissed,
     Edited,
     Submitted,
+}
+impl ReviewActionType {
+    fn to_action(&self) -> Action {
+        match self {
+            Self::Submitted => Action::Created,
+            Self::Edited => Action::Edited,
+            Self::Dismissed => unreachable!("ReviewActionType::to_action called with Dismissed"),
+        }
+    }
 }
 
 impl Display for ReviewActionType {
@@ -52,13 +71,23 @@ impl Display for ReviewActionType {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum IssueActionType {
+enum IssueActionType {
     Opened,
     Edited,
     Deleted,
     /// We don't care about other action types
     #[serde(other)]
     Ignored,
+}
+impl IssueActionType {
+    fn to_action(&self) -> Action {
+        match self {
+            Self::Opened => Action::Created,
+            Self::Edited => Action::Edited,
+            Self::Deleted => Action::Deleted,
+            Self::Ignored => unreachable!("IssueActionType::to_action called with Ignored"),
+        }
+    }
 }
 
 impl Display for IssueActionType {
@@ -69,12 +98,22 @@ impl Display for IssueActionType {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PullRequestActionType {
+enum PullRequestActionType {
     Opened,
     Edited,
     /// We don't care about other action types
     #[serde(other)]
     Ignored,
+}
+
+impl PullRequestActionType {
+    fn to_action(&self) -> Action {
+        match self {
+            Self::Opened => Action::Created,
+            Self::Edited => Action::Edited,
+            Self::Ignored => unreachable!("PullRequestActionType::to_action called with Ignored"),
+        }
+    }
 }
 
 impl Display for PullRequestActionType {
@@ -84,20 +123,20 @@ impl Display for PullRequestActionType {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Comment {
+struct Comment {
     body: String,
     id: i64,
     url: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Issue {
+struct Issue {
     action: IssueActionType,
     issue: IssueData,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct IssueData {
+struct IssueData {
     body: String,
     html_url: String,
     id: i64,
@@ -108,20 +147,20 @@ pub struct IssueData {
 
 /// Issue & Pull Request comments
 #[derive(Debug, Deserialize, Serialize)]
-pub struct IssueComment {
+struct IssueComment {
     action: CommentActionType,
     comment: Comment,
     issue: IssueData,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct PullRequest {
+struct PullRequest {
     action: PullRequestActionType,
     pull_request: PullRequestData,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct PullRequestData {
+struct PullRequestData {
     body: String,
     html_url: String,
     id: i64,
@@ -131,7 +170,7 @@ pub struct PullRequestData {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Review {
+struct Review {
     body: String,
     id: i64,
     url: String,
@@ -145,7 +184,7 @@ pub struct PullRequestReview {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct PullRequestReviewComment {
+struct PullRequestReviewComment {
     action: CommentActionType,
     comment: Comment,
     pull_request: PullRequestData,
@@ -153,7 +192,7 @@ pub struct PullRequestReviewComment {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum GithubWebhook {
+enum GithubWebhook {
     IssueComment(IssueComment),
     Issue(Issue),
     PullRequestReviewComment(PullRequestReviewComment),
@@ -198,46 +237,12 @@ pub async fn github_webhook(
         GithubWebhook::Issue(issue) => {
             info!("received {} (state: {})", webhook_type, issue.action);
             match issue.action {
-                IssueActionType::Opened => {
+                IssueActionType::Opened | IssueActionType::Edited | IssueActionType::Deleted => {
                     state
                         .tx
                         .send(WebhookData::Issue(crate::IssueData {
                             source_id: issue.issue.id.to_string(),
-                            action: Action::Created,
-                            title: issue.issue.title,
-                            body: issue.issue.body,
-                            is_pull_request: false,
-                            number: issue.issue.number,
-                            html_url: issue.issue.html_url,
-                            url: issue.issue.url,
-                            source: Source::Github,
-                        }))
-                        .await?
-                }
-                IssueActionType::Edited => {
-                    state
-                        .tx
-                        .send(WebhookData::Issue(crate::IssueData {
-                            source_id: issue.issue.id.to_string(),
-                            action: Action::Edited,
-                            title: issue.issue.title,
-                            body: issue.issue.body,
-                            is_pull_request: false,
-                            number: issue.issue.number,
-                            html_url: issue.issue.html_url,
-                            url: issue.issue.url,
-                            source: Source::Github,
-                        }))
-                        .await?
-                }
-
-                // FIXME: delete associated comments, reviews & review comments
-                IssueActionType::Deleted => {
-                    state
-                        .tx
-                        .send(WebhookData::Issue(crate::IssueData {
-                            source_id: issue.issue.id.to_string(),
-                            action: Action::Deleted,
+                            action: issue.action.to_action(),
                             title: issue.issue.title,
                             body: issue.issue.body,
                             is_pull_request: false,
@@ -253,70 +258,26 @@ pub async fn github_webhook(
         }
         GithubWebhook::IssueComment(comment) => {
             info!("received {} (state: {})", webhook_type, comment.action);
-            match comment.action {
-                CommentActionType::Created => {
-                    state
-                        .tx
-                        .send(WebhookData::Comment(crate::CommentData {
-                            source_id: comment.comment.id.to_string(),
-                            issue_id: comment.issue.id.to_string(),
-                            action: Action::Created,
-                            body: comment.comment.body,
-                            url: comment.comment.url,
-                        }))
-                        .await?
-                }
-                CommentActionType::Edited => {
-                    state
-                        .tx
-                        .send(WebhookData::Comment(crate::CommentData {
-                            source_id: comment.comment.id.to_string(),
-                            issue_id: comment.issue.id.to_string(),
-                            action: Action::Edited,
-                            body: comment.comment.body,
-                            url: comment.comment.url,
-                        }))
-                        .await?
-                }
-                CommentActionType::Deleted => {
-                    state
-                        .tx
-                        .send(WebhookData::Comment(crate::CommentData {
-                            source_id: comment.comment.id.to_string(),
-                            issue_id: comment.issue.id.to_string(),
-                            action: Action::Deleted,
-                            body: comment.comment.body,
-                            url: comment.comment.url,
-                        }))
-                        .await?
-                }
-            }
+            state
+                .tx
+                .send(WebhookData::Comment(crate::CommentData {
+                    source_id: comment.comment.id.to_string(),
+                    issue_id: comment.issue.id.to_string(),
+                    action: comment.action.to_action(),
+                    body: comment.comment.body,
+                    url: comment.comment.url,
+                }))
+                .await?;
         }
         GithubWebhook::PullRequest(pr) => {
             info!("received {} (state: {})", webhook_type, pr.action);
             match pr.action {
-                PullRequestActionType::Opened => {
+                PullRequestActionType::Opened | PullRequestActionType::Edited => {
                     state
                         .tx
                         .send(WebhookData::Issue(crate::IssueData {
                             source_id: pr.pull_request.id.to_string(),
-                            action: Action::Created,
-                            title: pr.pull_request.title,
-                            body: pr.pull_request.body,
-                            is_pull_request: true,
-                            number: pr.pull_request.number,
-                            html_url: pr.pull_request.html_url,
-                            url: pr.pull_request.url,
-                            source: Source::Github,
-                        }))
-                        .await?
-                }
-                PullRequestActionType::Edited => {
-                    state
-                        .tx
-                        .send(WebhookData::Issue(crate::IssueData {
-                            source_id: pr.pull_request.id.to_string(),
-                            action: Action::Edited,
+                            action: pr.action.to_action(),
                             title: pr.pull_request.title,
                             body: pr.pull_request.body,
                             is_pull_request: true,
@@ -333,25 +294,13 @@ pub async fn github_webhook(
         GithubWebhook::PullRequestReview(review) => {
             info!("received {} (state: {})", webhook_type, review.action);
             match review.action {
-                ReviewActionType::Submitted => {
+                ReviewActionType::Submitted | ReviewActionType::Edited => {
                     state
                         .tx
                         .send(WebhookData::Comment(crate::CommentData {
                             source_id: review.review.id.to_string(),
                             issue_id: review.pull_request.id.to_string(),
-                            action: Action::Created,
-                            body: review.review.body,
-                            url: review.review.url,
-                        }))
-                        .await?
-                }
-                ReviewActionType::Edited => {
-                    state
-                        .tx
-                        .send(WebhookData::Comment(crate::CommentData {
-                            source_id: review.review.id.to_string(),
-                            issue_id: review.pull_request.id.to_string(),
-                            action: Action::Edited,
+                            action: review.action.to_action(),
                             body: review.review.body,
                             url: review.review.url,
                         }))
@@ -362,49 +311,23 @@ pub async fn github_webhook(
         }
         GithubWebhook::PullRequestReviewComment(comment) => {
             info!("received {} (state: {})", webhook_type, comment.action);
-            match comment.action {
-                CommentActionType::Created => {
-                    state
-                        .tx
-                        .send(WebhookData::Comment(crate::CommentData {
-                            source_id: comment.comment.id.to_string(),
-                            issue_id: comment.pull_request.id.to_string(),
-                            action: Action::Created,
-                            body: comment.comment.body,
-                            url: comment.comment.url,
-                        }))
-                        .await?
-                }
-                CommentActionType::Edited => {
-                    state
-                        .tx
-                        .send(WebhookData::Comment(crate::CommentData {
-                            source_id: comment.comment.id.to_string(),
-                            issue_id: comment.pull_request.id.to_string(),
-                            action: Action::Edited,
-                            body: comment.comment.body,
-                            url: comment.comment.url,
-                        }))
-                        .await?
-                }
-                CommentActionType::Deleted => {
-                    state
-                        .tx
-                        .send(WebhookData::Comment(crate::CommentData {
-                            source_id: comment.comment.id.to_string(),
-                            issue_id: comment.pull_request.id.to_string(),
-                            action: Action::Deleted,
-                            body: comment.comment.body,
-                            url: comment.comment.url,
-                        }))
-                        .await?
-                }
-            }
+            state
+                .tx
+                .send(WebhookData::Comment(crate::CommentData {
+                    source_id: comment.comment.id.to_string(),
+                    issue_id: comment.pull_request.id.to_string(),
+                    action: comment.action.to_action(),
+                    body: comment.comment.body,
+                    url: comment.comment.url,
+                }))
+                .await?;
         }
     }
 
     Ok(())
 }
+
+const X_WEBHOOK_SECRET: HeaderName = HeaderName::from_static("x-webhook-secret");
 
 pub struct HfWebhookSecretValidator;
 
@@ -416,11 +339,10 @@ where
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let header_name = HeaderName::from_static("x-webhook-secret");
         let state = AppState::from_ref(state);
         let secret = parts
             .headers
-            .get(header_name)
+            .get(X_WEBHOOK_SECRET)
             .cloned()
             .ok_or(ApiError::Auth)?;
 
@@ -433,8 +355,93 @@ where
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum HfAction {
+    Create,
+    Update,
+    Delete,
+}
+
+impl HfAction {
+    fn to_action(&self) -> Action {
+        match self {
+            Self::Create => Action::Created,
+            Self::Update => Action::Edited,
+            Self::Delete => Action::Deleted,
+        }
+    }
+}
+
+impl Display for HfAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let action = match self {
+            Self::Create => "create",
+            Self::Update => "update",
+            Self::Delete => "delete",
+        };
+        write!(f, "{}", action)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+enum Scope {
+    #[serde(rename = "discussion")]
+    Discussion,
+    #[serde(rename = "discussion.comment")]
+    DiscussionComment,
+}
+
+impl Display for Scope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let scope = match self {
+            Self::Discussion => "discussion",
+            Self::DiscussionComment => "discussion.comment",
+        };
+        write!(f, "{}", scope)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct Event {
+    action: HfAction,
+    scope: Scope,
+}
+
+#[derive(Debug, Deserialize)]
+struct Url {
+    web: String,
+    api: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Discussion {
+    id: String,
+    is_pull_request: bool,
+    num: i32,
+    title: String,
+    url: Url,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebUrl {
+    web: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HfComment {
+    id: String,
+    #[serde(default)]
+    content: String,
+    url: WebUrl,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct HuggingfaceWebhook {
-    tmp: String,
+    event: Event,
+    discussion: Option<Discussion>,
+    comment: Option<HfComment>,
 }
 
 pub async fn huggingface_webhook(
@@ -442,8 +449,63 @@ pub async fn huggingface_webhook(
     State(state): State<AppState>,
     Json(webhook): Json<HuggingfaceWebhook>,
 ) -> Result<(), ApiError> {
-    info!("{webhook:?}");
+    info!(
+        "received {} (status: {})",
+        webhook.event.scope, webhook.event.action
+    );
 
+    let discussion = match webhook.discussion {
+        Some(discussion) => discussion,
+        None => {
+            return Err(ApiError::MalformedWebhook(format!(
+                r#"Missing discussion when event.scope = "{}" and event.action = "{}""#,
+                webhook.event.scope, webhook.event.action
+            )))
+        }
+    };
+    match webhook.event.scope {
+        Scope::Discussion => {
+            let comment_content = match webhook.comment {
+                Some(comment) => comment.content,
+                None => String::new(),
+            };
+            state
+                .tx
+                .send(WebhookData::Issue(crate::IssueData {
+                    source_id: discussion.id,
+                    action: webhook.event.action.to_action(),
+                    title: discussion.title,
+                    body: comment_content,
+                    is_pull_request: discussion.is_pull_request,
+                    number: discussion.num,
+                    html_url: discussion.url.web,
+                    url: discussion.url.api,
+                    source: Source::HuggingFace,
+                }))
+                .await?;
+        }
+        Scope::DiscussionComment => {
+            let comment = match webhook.comment {
+                Some(comment) => comment,
+                None => {
+                    return Err(ApiError::MalformedWebhook(format!(
+                        r#"Missing comment when event.scope = "{}" and event.action = "{}""#,
+                        webhook.event.scope, webhook.event.action
+                    )))
+                }
+            };
+            state
+                .tx
+                .send(WebhookData::Comment(crate::CommentData {
+                    source_id: comment.id,
+                    action: webhook.event.action.to_action(),
+                    body: comment.content,
+                    issue_id: discussion.id,
+                    url: comment.url.web,
+                }))
+                .await?;
+        }
+    }
     Ok(())
 }
 
@@ -520,7 +582,7 @@ mod tests {
     async fn test_hf_webhook_handler() {
         let config: IssueBotConfig = load_config("ISSUE_BOT_TEST").unwrap();
         let auth_token = config.auth_token.clone();
-        let (tx, _) = mpsc::channel(8);
+        let (tx, _rx) = mpsc::channel(8);
         let state = AppState {
             auth_token: auth_token.clone(),
             tx,

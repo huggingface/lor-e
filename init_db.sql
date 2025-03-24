@@ -7,6 +7,7 @@ CREATE EXTENSION vector;
 CREATE TABLE IF NOT EXISTS issues (
   id SERIAL PRIMARY KEY,
   source_id VARCHAR NOT NULL,
+  source VARCHAR NOT NULL,
   title TEXT NOT NULL,
   body TEXT NOT NULL,
   is_pull_request BOOLEAN NOT NULL,

@@ -186,7 +186,17 @@ impl Display for Action {
 
 enum Source {
     Github,
-    Huggingface,
+    HuggingFace,
+}
+
+impl Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source = match self {
+            Self::Github => "Github",
+            Self::HuggingFace => "HuggingFace",
+        };
+        write!(f, "{}", source)
+    }
 }
 
 #[derive(FromRow)]
@@ -220,25 +230,32 @@ async fn handle_webhooks(
                             .fetch_all(&pool)
                             .await?;
 
-                        github_api
-                            .comment_on_issue(
-                                &issue.url,
-                                closest_issues
-                                    .into_iter()
-                                    .map(|r| ClosestIssue {
-                                        title: r.title,
-                                        number: r.number,
-                                        html_url: r.html_url,
-                                    })
-                                    .collect(),
-                            )
-                            .await?;
+                        match (issue.is_pull_request, &issue.source) {
+                            (false, Source::Github) => {
+                                github_api
+                                    .comment_on_issue(
+                                        &issue.url,
+                                        closest_issues
+                                            .into_iter()
+                                            .map(|r| ClosestIssue {
+                                                title: r.title,
+                                                number: r.number,
+                                                html_url: r.html_url,
+                                            })
+                                            .collect(),
+                                    )
+                                    .await?
+                            }
+                            (false, Source::HuggingFace) => todo!("comment on HF discussion"),
+                            _ => (),
+                        }
 
                         sqlx::query(
-                        r#"insert into issues (source_id, title, body, is_pull_request, number, html_url, url, embedding, created_at, updated_at)
-                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
+                        r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding, created_at, updated_at)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
                         )
                         .bind(issue.source_id)
+                        .bind(issue.source.to_string())
                         .bind(issue.title)
                         .bind(issue.body)
                         .bind(issue.is_pull_request)
