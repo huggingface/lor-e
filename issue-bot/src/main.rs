@@ -12,6 +12,7 @@ use chrono::Utc;
 use config::{load_config, IssueBotConfig, ServerConfig};
 use embeddings::inference_endpoints::EmbeddingApi;
 use github::GithubApi;
+use huggingface::HuggingfaceApi;
 use metrics::start_metrics_server;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use middlewares::RequestSpan;
@@ -35,6 +36,7 @@ mod config;
 mod embeddings;
 mod errors;
 mod github;
+mod huggingface;
 mod metrics;
 mod middlewares;
 mod routes;
@@ -210,6 +212,7 @@ async fn handle_webhooks(
     mut rx: Receiver<WebhookData>,
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
+    huggingface_api: HuggingfaceApi,
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     while let Some(webhook_data) = rx.recv().await {
@@ -233,20 +236,14 @@ async fn handle_webhooks(
                         match (issue.is_pull_request, &issue.source) {
                             (false, Source::Github) => {
                                 github_api
-                                    .comment_on_issue(
-                                        &issue.url,
-                                        closest_issues
-                                            .into_iter()
-                                            .map(|r| ClosestIssue {
-                                                title: r.title,
-                                                number: r.number,
-                                                html_url: r.html_url,
-                                            })
-                                            .collect(),
-                                    )
-                                    .await?
+                                    .comment_on_issue(&issue.url, closest_issues)
+                                    .await?;
                             }
-                            (false, Source::HuggingFace) => todo!("comment on HF discussion"),
+                            (false, Source::HuggingFace) => {
+                                huggingface_api
+                                    .comment_on_issue(&issue.url, closest_issues)
+                                    .await?;
+                            }
                             _ => (),
                         }
 
@@ -399,7 +396,8 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let embedding_api = EmbeddingApi::new(config.model_api).await?;
-    let github_api = GithubApi::new(config.github_api, config.message_config)?;
+    let github_api = GithubApi::new(config.github_api, config.message_config.clone())?;
+    let huggingface_api = HuggingfaceApi::new(config.huggingface_api, config.message_config)?;
 
     let (tx, rx) = mpsc::channel(4_096);
 
@@ -419,7 +417,7 @@ async fn main() -> anyhow::Result<()> {
             false,
             setup_metrics_recorder()
         ))),
-        handle_webhooks(rx, embedding_api, github_api, pool)
+        handle_webhooks(rx, embedding_api, github_api, huggingface_api, pool)
     )?;
 
     Ok(())

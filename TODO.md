@@ -1,7 +1,7 @@
 # Priorities
 
 - [x] on open issue event, do retrieval and suggest 3/5 closest issues / prs
-- [ ] on open discussion event, do retrieval and suggest 3/5 closest issues / prs
+- [x] on open discussion event, do retrieval and suggest 3/5 closest issues / prs
 
 - [x] do the following tasks for GH webhooks
 - [x] do the following tasks for HF webhooks

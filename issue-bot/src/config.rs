@@ -44,6 +44,11 @@ pub struct GithubApiConfig {
     pub auth_token: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct HuggingfaceApiConfig {
+    pub auth_token: String,
+}
+
 /// bot's comment message
 /// will be of the form:
 /// ```
@@ -59,7 +64,7 @@ pub struct GithubApiConfig {
 ///
 /// Thank you for opening this issue!
 /// ```
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct MessageConfig {
     pub pre: String,
     pub post: String,
@@ -70,6 +75,7 @@ pub struct IssueBotConfig {
     pub auth_token: String,
     pub database: DatabaseConfig,
     pub github_api: GithubApiConfig,
+    pub huggingface_api: HuggingfaceApiConfig,
     pub message_config: MessageConfig,
     pub model_api: ModelApiConfig,
     pub server: ServerConfig,
