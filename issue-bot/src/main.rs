@@ -282,7 +282,6 @@ async fn handle_webhooks(
                         .await?;
                         Some(issue.source_id)
                     }
-                    // FIXME: delete associated comments, reviews & review comments
                     Action::Deleted => {
                         sqlx::query!(
                             r#"DELETE FROM issues WHERE source_id = $1"#,

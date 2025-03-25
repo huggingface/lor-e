@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS issues (
 CREATE TABLE IF NOT EXISTS comments (
   id SERIAL PRIMARY KEY,
   source_id VARCHAR NOT NULL,
-  issue_id INT NOT NULL REFERENCES issues(id),
+  issue_id INT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
   body TEXT NOT NULL,
   url VARCHAR NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),

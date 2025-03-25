@@ -21,7 +21,7 @@
 
 - [x] fix github issue link (currently `api.github.com` instead of the regular github UI url)
 
-- [ ] fix: delete associated comments, reviews & review comments
+- [x] fix: delete associated comments, reviews & review comments
 
 # Ideas
 
