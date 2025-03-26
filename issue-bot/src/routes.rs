@@ -429,11 +429,17 @@ struct WebUrl {
 }
 
 #[derive(Debug, Deserialize)]
+struct Author {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HfComment {
     id: String,
     #[serde(default)]
     content: String,
+    author: Author,
     url: WebUrl,
 }
 
@@ -494,16 +500,19 @@ pub async fn huggingface_webhook(
                     )))
                 }
             };
-            state
-                .tx
-                .send(WebhookData::Comment(crate::CommentData {
-                    source_id: comment.id,
-                    action: webhook.event.action.to_action(),
-                    body: comment.content,
-                    issue_id: discussion.id,
-                    url: comment.url.web,
-                }))
-                .await?;
+            // check if comment is from `lor-e-bot`
+            if comment.author.id != "67e0825265e294ad98833748" {
+                state
+                    .tx
+                    .send(WebhookData::Comment(crate::CommentData {
+                        source_id: comment.id,
+                        action: webhook.event.action.to_action(),
+                        body: comment.content,
+                        issue_id: discussion.id,
+                        url: comment.url.web,
+                    }))
+                    .await?;
+            }
         }
     }
     Ok(())
