@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tracing::info;
 
-use crate::{errors::ApiError, Action, AppState, Source, WebhookData};
+use crate::{errors::ApiError, Action, AppState, EventData, RepositoryData, Source};
 
 fn compute_signature(payload: &[u8], secret: &str) -> String {
     let key = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
@@ -240,7 +240,7 @@ pub async fn github_webhook(
                 IssueActionType::Opened | IssueActionType::Edited | IssueActionType::Deleted => {
                     state
                         .tx
-                        .send(WebhookData::Issue(crate::IssueData {
+                        .send(EventData::Issue(crate::IssueData {
                             source_id: issue.issue.id.to_string(),
                             action: issue.action.to_action(),
                             title: issue.issue.title,
@@ -260,7 +260,7 @@ pub async fn github_webhook(
             info!("received {} (state: {})", webhook_type, comment.action);
             state
                 .tx
-                .send(WebhookData::Comment(crate::CommentData {
+                .send(EventData::Comment(crate::CommentData {
                     source_id: comment.comment.id.to_string(),
                     issue_id: comment.issue.id.to_string(),
                     action: comment.action.to_action(),
@@ -275,7 +275,7 @@ pub async fn github_webhook(
                 PullRequestActionType::Opened | PullRequestActionType::Edited => {
                     state
                         .tx
-                        .send(WebhookData::Issue(crate::IssueData {
+                        .send(EventData::Issue(crate::IssueData {
                             source_id: pr.pull_request.id.to_string(),
                             action: pr.action.to_action(),
                             title: pr.pull_request.title,
@@ -297,7 +297,7 @@ pub async fn github_webhook(
                 ReviewActionType::Submitted | ReviewActionType::Edited => {
                     state
                         .tx
-                        .send(WebhookData::Comment(crate::CommentData {
+                        .send(EventData::Comment(crate::CommentData {
                             source_id: review.review.id.to_string(),
                             issue_id: review.pull_request.id.to_string(),
                             action: review.action.to_action(),
@@ -313,7 +313,7 @@ pub async fn github_webhook(
             info!("received {} (state: {})", webhook_type, comment.action);
             state
                 .tx
-                .send(WebhookData::Comment(crate::CommentData {
+                .send(EventData::Comment(crate::CommentData {
                     source_id: comment.comment.id.to_string(),
                     issue_id: comment.pull_request.id.to_string(),
                     action: comment.action.to_action(),
@@ -477,7 +477,7 @@ pub async fn huggingface_webhook(
             };
             state
                 .tx
-                .send(WebhookData::Issue(crate::IssueData {
+                .send(EventData::Issue(crate::IssueData {
                     source_id: discussion.id,
                     action: webhook.event.action.to_action(),
                     title: discussion.title,
@@ -504,7 +504,7 @@ pub async fn huggingface_webhook(
             if comment.author.id != "67e0825265e294ad98833748" {
                 state
                     .tx
-                    .send(WebhookData::Comment(crate::CommentData {
+                    .send(EventData::Comment(crate::CommentData {
                         source_id: comment.id,
                         action: webhook.event.action.to_action(),
                         body: comment.content,
@@ -522,6 +522,15 @@ pub fn event_router() -> Router<AppState> {
     Router::new()
         .route("/github", post(github_webhook))
         .route("/huggingface", post(huggingface_webhook))
+}
+
+// TODO: create job table and reply id?
+pub async fn index_repository(
+    State(state): State<AppState>,
+    Json(repository): Json<RepositoryData>,
+) -> Result<(), ApiError> {
+    state.tx.send(EventData::Indexation(repository)).await?;
+    Ok(())
 }
 
 #[cfg(test)]

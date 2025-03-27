@@ -5,7 +5,7 @@ use axum::{
     http::{Response, StatusCode},
     middleware,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use chrono::Utc;
@@ -17,6 +17,8 @@ use metrics::start_metrics_server;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use middlewares::RequestSpan;
 use pgvector::Vector;
+use routes::index_repository;
+use serde::Deserialize;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     prelude::FromRow,
@@ -44,7 +46,7 @@ mod routes;
 #[derive(Clone)]
 pub struct AppState {
     auth_token: String,
-    tx: Sender<WebhookData>,
+    tx: Sender<EventData>,
 }
 
 fn setup_metrics_recorder() -> PrometheusHandle {
@@ -103,6 +105,7 @@ pub async fn flatten(handle: JoinHandle<anyhow::Result<()>>) -> anyhow::Result<(
 fn app(state: AppState) -> Router {
     Router::new()
         .nest("/event", routes::event_router())
+        .route("/index", post(index_repository))
         .route_layer(middleware::from_fn(middlewares::track_metrics))
         .layer(
             ServiceBuilder::new()
@@ -164,9 +167,22 @@ struct CommentData {
     url: String,
 }
 
-enum WebhookData {
+#[derive(Clone, Deserialize)]
+pub struct RepositoryData {
+    repo_id: String,
+    source: Source,
+}
+
+impl Display for RepositoryData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} repo '{}'", self.source, self.repo_id)
+    }
+}
+
+enum EventData {
     Issue(IssueData),
     Comment(CommentData),
+    Indexation(RepositoryData),
 }
 
 enum Action {
@@ -186,6 +202,7 @@ impl Display for Action {
     }
 }
 
+#[derive(Clone, Deserialize)]
 enum Source {
     Github,
     HuggingFace,
@@ -206,10 +223,11 @@ struct ClosestIssue {
     title: String,
     number: i32,
     html_url: String,
+    cosine_similarity: i32,
 }
 
 async fn handle_webhooks(
-    mut rx: Receiver<WebhookData>,
+    mut rx: Receiver<EventData>,
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
@@ -218,7 +236,7 @@ async fn handle_webhooks(
     while let Some(webhook_data) = rx.recv().await {
         let now = Utc::now();
         let issue_id = match webhook_data {
-            WebhookData::Issue(issue) => {
+            EventData::Issue(issue) => {
                 info!("handling issue (state: {})", issue.action);
                 match issue.action {
                     Action::Created => {
@@ -227,7 +245,7 @@ async fn handle_webhooks(
                             Vector::from(embedding_api.generate_embedding(issue_text).await?);
 
                         let closest_issues: Vec<ClosestIssue> = sqlx::query_as(
-                            "select title, number, html_url from issues order by embedding <=> $1 LIMIT 3",
+                            "select title, number, html_url, 1 - (embedding <=> $1) as cosine_similarity from issues order by embedding <=> $1 LIMIT 3",
                         )
                             .bind(embedding.clone())
                             .fetch_all(&pool)
@@ -293,7 +311,7 @@ async fn handle_webhooks(
                     }
                 }
             }
-            WebhookData::Comment(comment) => {
+            EventData::Comment(comment) => {
                 info!("handling comment (state: {})", comment.action);
                 match comment.action {
                     Action::Created => {
@@ -336,6 +354,51 @@ async fn handle_webhooks(
                         Some(comment.issue_id)
                     }
                 }
+            }
+            EventData::Indexation(repository) => {
+                info!("indexing {repository}");
+                let (issues_tx, mut issues_rx) = mpsc::unbounded_channel();
+                let github_api = github_api.clone();
+                let repository_clone = repository.clone();
+                let handle = tokio::spawn(async move {
+                    github_api.get_issues(issues_tx, repository_clone).await
+                });
+                // TODO: parallelize
+                while let Some(issue) = issues_rx.recv().await {
+                    let comment_string = format!(
+                        "\n----\nComment: {}",
+                        issue
+                            .comments
+                            .into_iter()
+                            .map(|c| c.body.to_owned())
+                            .collect::<Vec<String>>()
+                            .join("\n----\nComment: ")
+                    );
+                    let issue_text = format!("# {}\n{}{}", issue.title, issue.body, comment_string);
+                    let embedding =
+                        Vector::from(embedding_api.generate_embedding(issue_text).await?);
+                    let now = Utc::now();
+                    sqlx::query(
+                        r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding, created_at, updated_at)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
+                        )
+                        .bind(issue.id.to_string())
+                        .bind(repository.source.to_string())
+                        .bind(issue.title)
+                        .bind(issue.body)
+                        .bind(issue.is_pull_request)
+                        .bind(issue.number)
+                        .bind(issue.html_url)
+                        .bind(issue.url)
+                        .bind(embedding)
+                        .bind(now)
+                        .bind(now)
+                        .execute(&pool)
+                        .await?;
+                    info!("indexed issue #{}", issue.number);
+                }
+                handle.await??;
+                None
             }
         };
 

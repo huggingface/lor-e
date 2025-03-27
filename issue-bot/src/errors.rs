@@ -7,7 +7,7 @@ use serde_json::json;
 use thiserror::Error;
 use tracing::error;
 
-use crate::WebhookData;
+use crate::EventData;
 
 #[derive(Debug, Error)]
 pub enum ApiError {
@@ -22,7 +22,7 @@ pub enum ApiError {
     #[error("malformed webhook: {0}")]
     MalformedWebhook(String),
     #[error("send error: {0}")]
-    Send(#[from] tokio::sync::mpsc::error::SendError<WebhookData>),
+    Send(#[from] tokio::sync::mpsc::error::SendError<EventData>),
     #[error("serde json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
     #[error("signatures don't match")]
