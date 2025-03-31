@@ -22,7 +22,7 @@ use serde::{Deserialize, Deserializer};
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     prelude::FromRow,
-    Pool, Postgres,
+    Pool, Postgres, QueryBuilder,
 };
 use tokio::{
     net::TcpListener,
@@ -31,7 +31,7 @@ use tokio::{
 };
 use tower::{BoxError, ServiceBuilder};
 use tower_http::trace::TraceLayer;
-use tracing::{info, info_span, Instrument, Span};
+use tracing::{info, info_span, Span};
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -258,7 +258,6 @@ async fn handle_webhooks(
                             .bind(embedding.clone())
                             .fetch_all(&pool)
                             .await?;
-                        info!("closest_issues: {closest_issues:?}");
 
                         match (issue.is_pull_request, &issue.source) {
                             (false, Source::Github) => {
@@ -364,7 +363,7 @@ async fn handle_webhooks(
                     repository_id = repository.repo_id,
                     source = repository.source.to_string()
                 );
-                info!(parent: &span, "indexing {repository}");
+                info!(parent: &span, "indexing started");
                 let github_api = github_api.clone();
                 let from_page = sqlx::query!(
                     "select page from jobs where repository_id = $1",
@@ -384,7 +383,7 @@ async fn handle_webhooks(
                         "\n----\nComment: {}",
                         issue
                             .comments
-                            .into_iter()
+                            .iter()
                             .map(|c| c.body.to_owned())
                             .collect::<Vec<String>>()
                             .join("\n----\nComment: ")
@@ -392,10 +391,19 @@ async fn handle_webhooks(
                     let issue_text = format!("# {}\n{}{}", issue.title, issue.body, comment_string);
                     let embedding =
                         Vector::from(embedding_api.generate_embedding(issue_text).await?);
-                    sqlx::query(
+                    let issue_id: Option<i32> = sqlx::query_scalar!(
+                        "select id from issues where source_id = $1",
+                        issue.id.to_string()
+                    )
+                    .fetch_optional(&pool)
+                    .await?;
+                    let issue_id = if let Some(id) = issue_id {
+                        id
+                    } else {
+                        sqlx::query_scalar(
                             r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding)
                                values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                               on conflict do nothing"#
+                               returning id"#
                             )
                             .bind(issue.id.to_string())
                             .bind(source)
@@ -406,8 +414,22 @@ async fn handle_webhooks(
                             .bind(issue.html_url)
                             .bind(issue.url)
                             .bind(embedding)
-                            .execute(&pool)
-                            .await?;
+                            .fetch_one(&pool)
+                            .await?
+                    };
+                    if !issue.comments.is_empty() {
+                        let mut qb = QueryBuilder::new(
+                            "insert into comments (source_id, body, url, issue_id)",
+                        );
+                        qb.push_values(issue.comments, |mut b, comment| {
+                            b.push_bind(comment.id)
+                                .push_bind(comment.body)
+                                .push_bind(comment.url)
+                                .push_bind(issue_id);
+                        });
+                        qb.push("on conflict do nothing");
+                        qb.build().execute(&pool).await?;
+                    }
                     if let Some(page) = page {
                         sqlx::query!(
                             r#"insert into jobs (repository_id, page)
@@ -416,7 +438,7 @@ async fn handle_webhooks(
                                do update
                                set
                                    page = excluded.page,
-                                   updated_at = current_timestamp;"#,
+                                   updated_at = current_timestamp"#,
                             repository.repo_id,
                             page,
                         )

@@ -63,8 +63,8 @@ struct Issue {
 #[derive(Debug, Deserialize)]
 pub(crate) struct Comment {
     pub(crate) body: String,
-    id: i64,
-    url: String,
+    pub(crate) id: i64,
+    pub(crate) url: String,
 }
 
 #[derive(Debug)]
