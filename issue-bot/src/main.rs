@@ -8,9 +8,9 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use chrono::Utc;
 use config::{load_config, IssueBotConfig, ServerConfig};
 use embeddings::inference_endpoints::EmbeddingApi;
+use futures::{pin_mut, StreamExt};
 use github::GithubApi;
 use huggingface::HuggingfaceApi;
 use metrics::start_metrics_server;
@@ -18,7 +18,7 @@ use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use middlewares::RequestSpan;
 use pgvector::Vector;
 use routes::index_repository;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     prelude::FromRow,
@@ -31,7 +31,7 @@ use tokio::{
 };
 use tower::{BoxError, ServiceBuilder};
 use tower_http::trace::TraceLayer;
-use tracing::{info, Span};
+use tracing::{info, info_span, Instrument, Span};
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -100,6 +100,15 @@ pub async fn flatten(handle: JoinHandle<anyhow::Result<()>>) -> anyhow::Result<(
         Ok(Err(err)) => Err(err),
         Err(err) => Err(anyhow::anyhow!("handling failed: {err}")),
     }
+}
+
+pub fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
 }
 
 fn app(state: AppState) -> Router {
@@ -218,12 +227,12 @@ impl Display for Source {
     }
 }
 
-#[derive(FromRow)]
+#[derive(Debug, FromRow)]
 struct ClosestIssue {
     title: String,
     number: i32,
     html_url: String,
-    cosine_similarity: i32,
+    cosine_similarity: f64,
 }
 
 async fn handle_webhooks(
@@ -234,7 +243,6 @@ async fn handle_webhooks(
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     while let Some(webhook_data) = rx.recv().await {
-        let now = Utc::now();
         let issue_id = match webhook_data {
             EventData::Issue(issue) => {
                 info!("handling issue (state: {})", issue.action);
@@ -250,6 +258,7 @@ async fn handle_webhooks(
                             .bind(embedding.clone())
                             .fetch_all(&pool)
                             .await?;
+                        info!("closest_issues: {closest_issues:?}");
 
                         match (issue.is_pull_request, &issue.source) {
                             (false, Source::Github) => {
@@ -266,8 +275,8 @@ async fn handle_webhooks(
                         }
 
                         sqlx::query(
-                        r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding, created_at, updated_at)
-                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
+                        r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
                         )
                         .bind(issue.source_id)
                         .bind(issue.source.to_string())
@@ -278,8 +287,6 @@ async fn handle_webhooks(
                         .bind(issue.html_url)
                         .bind(issue.url)
                         .bind(embedding)
-                        .bind(now)
-                        .bind(now)
                         .execute(&pool)
                         .await?;
 
@@ -288,12 +295,11 @@ async fn handle_webhooks(
                     Action::Edited => {
                         sqlx::query!(
                             r#"update issues
-                           set title = $1, body = $2, url = $3, updated_at = $4
-                           where source_id = $5"#,
+                           set title = $1, body = $2, url = $3, updated_at = current_timestamp
+                           where source_id = $4"#,
                             issue.title,
                             issue.body,
                             issue.url,
-                            now,
                             issue.source_id,
                         )
                         .execute(&pool)
@@ -316,14 +322,12 @@ async fn handle_webhooks(
                 match comment.action {
                     Action::Created => {
                         sqlx::query!(
-                            r#"insert into comments (source_id, body, url, created_at, updated_at, issue_id)
-                               values ($1, $2, $3, $4, $5,
-                                      (select id from issues where source_id = $6))"#,
+                            r#"insert into comments (source_id, body, url, issue_id)
+                               values ($1, $2, $3,
+                                      (select id from issues where source_id = $4))"#,
                             comment.source_id,
                             comment.body,
                             comment.url,
-                            now,
-                            now,
                             comment.issue_id,
                         )
                         .execute(&pool)
@@ -333,11 +337,10 @@ async fn handle_webhooks(
                     Action::Edited => {
                         sqlx::query!(
                             r#"update comments
-                           set body = $1, url = $2, updated_at = $3
-                           where source_id = $4"#,
+                           set body = $1, url = $2, updated_at = current_timestamp
+                           where source_id = $3"#,
                             comment.body,
                             comment.url,
-                            now,
                             comment.source_id,
                         )
                         .execute(&pool)
@@ -356,15 +359,27 @@ async fn handle_webhooks(
                 }
             }
             EventData::Indexation(repository) => {
-                info!("indexing {repository}");
-                let (issues_tx, mut issues_rx) = mpsc::unbounded_channel();
+                let span = info_span!(
+                    "indexation",
+                    repository_id = repository.repo_id,
+                    source = repository.source.to_string()
+                );
+                info!(parent: &span, "indexing {repository}");
                 let github_api = github_api.clone();
-                let repository_clone = repository.clone();
-                let handle = tokio::spawn(async move {
-                    github_api.get_issues(issues_tx, repository_clone).await
-                });
-                // TODO: parallelize
-                while let Some(issue) = issues_rx.recv().await {
+                let from_page = sqlx::query!(
+                    "select page from jobs where repository_id = $1",
+                    repository.repo_id
+                )
+                .map(|row| row.page + 1)
+                .fetch_optional(&pool)
+                .await?;
+                let issues = github_api.get_issues(from_page, repository.clone());
+                pin_mut!(issues);
+                while let Some(issue) = issues.next().await {
+                    let (issue, page) = issue?;
+                    let embedding_api = embedding_api.clone();
+                    let pool = pool.clone();
+                    let source = repository.source.to_string();
                     let comment_string = format!(
                         "\n----\nComment: {}",
                         issue
@@ -377,27 +392,45 @@ async fn handle_webhooks(
                     let issue_text = format!("# {}\n{}{}", issue.title, issue.body, comment_string);
                     let embedding =
                         Vector::from(embedding_api.generate_embedding(issue_text).await?);
-                    let now = Utc::now();
                     sqlx::query(
-                        r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding, created_at, updated_at)
-                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
+                            r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding)
+                               values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                               on conflict do nothing"#
+                            )
+                            .bind(issue.id.to_string())
+                            .bind(source)
+                            .bind(issue.title)
+                            .bind(issue.body)
+                            .bind(issue.is_pull_request)
+                            .bind(issue.number)
+                            .bind(issue.html_url)
+                            .bind(issue.url)
+                            .bind(embedding)
+                            .execute(&pool)
+                            .await?;
+                    if let Some(page) = page {
+                        sqlx::query!(
+                            r#"insert into jobs (repository_id, page)
+                               values ($1, $2)
+                               on conflict (repository_id)
+                               do update
+                               set
+                                   page = excluded.page,
+                                   updated_at = current_timestamp;"#,
+                            repository.repo_id,
+                            page,
                         )
-                        .bind(issue.id.to_string())
-                        .bind(repository.source.to_string())
-                        .bind(issue.title)
-                        .bind(issue.body)
-                        .bind(issue.is_pull_request)
-                        .bind(issue.number)
-                        .bind(issue.html_url)
-                        .bind(issue.url)
-                        .bind(embedding)
-                        .bind(now)
-                        .bind(now)
                         .execute(&pool)
                         .await?;
-                    info!("indexed issue #{}", issue.number);
+                    }
                 }
-                handle.await??;
+                sqlx::query!(
+                    "delete from jobs where repository_id = $1",
+                    repository.repo_id
+                )
+                .execute(&pool)
+                .await?;
+                info!(parent: &span, "finished indexing {repository}");
                 None
             }
         };
@@ -433,7 +466,7 @@ async fn handle_webhooks(
             let embedding = Vector::from(embedding_api.generate_embedding(issue_text).await?);
             sqlx::query(
                 r#"update issues
-               set embedding = $1
+               set embedding = $1, updated_at = current_timestamp
                where source_id = $2"#,
             )
             .bind(embedding)

@@ -1,38 +1,40 @@
-use std::sync::Arc;
+use std::time::Duration;
 
-use futures::stream::FuturesUnordered;
+use async_stream::try_stream;
+use chrono::Utc;
+use futures::Stream;
 use reqwest::{
-    header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, LINK},
+    header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, LINK},
     Client,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{
-    sync::{
-        mpsc::{self, UnboundedSender},
-        Semaphore,
-    },
-    task::JoinHandle,
-};
+use tokio::time::sleep;
 use tracing::info;
 
 use crate::{
     config::{GithubApiConfig, MessageConfig},
-    ClosestIssue, RepositoryData,
+    ClosestIssue, RepositoryData, deserialize_null_default
 };
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+const X_RATELIMIT_REMAINING: HeaderName = HeaderName::from_static("x-ratelimit-remaining");
+const X_RATELIMIT_RESET: HeaderName = HeaderName::from_static("x-ratelimit-reset");
 
 #[derive(Debug, Error)]
 pub enum GithubApiError {
     #[error("invalid header value: {0}")]
     InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+    #[error("missing rate limit headers: {0:?} {1:?}")]
+    MissingRateLimitHeaders(Option<HeaderValue>, Option<HeaderValue>),
+    #[error("parse int error: {0}")]
+    ParseInt(#[from] std::num::ParseIntError),
     #[error("reqwest error: {0}")]
     Reqwest(#[from] reqwest::Error),
     #[error("semaphore acquire error: {0}")]
     SemaphoreAcquire(#[from] tokio::sync::AcquireError),
-    #[error("failed to send message to channel")]
-    Send,
+    #[error("serde_json error: {0}")]
+    SerdeJson(#[from] serde_json::Error),
     #[error("tokio task join error: {0}")]
     TaskJoin(#[from] tokio::task::JoinError),
     #[error("to str error: {0}")]
@@ -46,6 +48,7 @@ struct PullRequest {
 
 #[derive(Debug, Deserialize)]
 struct Issue {
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     body: String,
     comments_url: String,
     html_url: String,
@@ -168,67 +171,53 @@ impl GithubApi {
         Ok(())
     }
 
-    pub(crate) async fn get_issues(
+    pub(crate) fn get_issues(
         &self,
-        issues_tx: UnboundedSender<IssueWithComments>,
+        from_page: Option<i32>,
         repository: RepositoryData,
-    ) -> Result<(), GithubApiError> {
-        let mut url = format!("https://api.github.com/repos/{}/issues", repository.repo_id);
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let client = self.client.clone();
-        let handle = tokio::spawn(async move {
+    ) -> impl Stream<Item = Result<(IssueWithComments, Option<i32>), GithubApiError>> + use<'_> {
+        try_stream! {
+            let url = format!("https://api.github.com/repos/{}/issues", repository.repo_id);
+            let client = self.client.clone();
+            let mut page = from_page.unwrap_or(1);
             loop {
                 let res = client
                     .get(&url)
-                    .query(&[("state", "all"), ("direction", "asc"), ("per_page", "100")])
-                    .send()
-                    .await?;
+                    .query(&[
+                        ("state", "all"),
+                        ("direction", "desc"),
+                        ("page", &page.to_string()),
+                        ("per_page", "100"),
+                    ])
+                .send()
+                .await?;
                 let link_header = res.headers().get(LINK).cloned();
+                let ratelimit_remaining = res.headers().get(X_RATELIMIT_REMAINING).cloned();
+                let ratelimit_reset = res.headers().get(X_RATELIMIT_RESET).cloned();
+                handle_ratelimit(ratelimit_remaining, ratelimit_reset).await?;
                 let issues = res.json::<Vec<Issue>>().await?;
-                if let Some(next_page_url) = get_next_page(link_header)? {
-                    url = next_page_url;
-                } else {
+                if get_next_page(link_header)?.is_none() {
                     break;
                 }
-                tx.send(issues).map_err(|_| GithubApiError::Send)?;
-            }
-            Ok(())
-        });
-
-        let semaphore = Arc::new(Semaphore::new(16));
-        let client = self.client.clone();
-        let for_each_handle = tokio::spawn(async move {
-            let handles = FuturesUnordered::new();
-            while let Some(issues) = rx.recv().await {
-                for issue in issues.into_iter().filter(|i| i.pull_request.is_none()) {
-                    let client = client.clone();
-                    let issues_tx = issues_tx.clone();
-                    let permit = semaphore.clone().acquire_owned().await?;
-                    handles.push(tokio::spawn(async move {
-                        let comments = client
-                            .get(&issue.comments_url)
-                            .query(&[("direction", "asc")])
-                            .send()
-                            .await?
-                            .json::<Vec<Comment>>()
-                            .await?;
-                        drop(permit);
-                        issues_tx
-                            .send(IssueWithComments::new(issue, comments))
-                            .map_err(|_| GithubApiError::Send)?;
-                        Ok(())
-                    }));
+                let issues: Vec<Issue> = issues.into_iter().filter(|i| i.pull_request.is_none()).collect();
+                let page_issue_count = issues.len();
+                for (i, issue) in issues.into_iter().enumerate() {
+                    let res = client
+                        .get(&issue.comments_url)
+                        .query(&[("direction", "asc")])
+                        .send()
+                        .await?;
+                    let ratelimit_remaining = res.headers().get(X_RATELIMIT_REMAINING).cloned();
+                    let ratelimit_reset = res.headers().get(X_RATELIMIT_RESET).cloned();
+                    handle_ratelimit(ratelimit_remaining, ratelimit_reset).await?;
+                    let comments = res
+                        .json::<Vec<Comment>>()
+                        .await?;
+                    yield (IssueWithComments::new(issue, comments), (i + 1 == page_issue_count).then_some(page));
                 }
+                page += 1;
             }
-            let results: Vec<Result<Result<(), GithubApiError>, tokio::task::JoinError>> =
-                futures::future::join_all(handles).await;
-            let results: Result<Vec<_>, GithubApiError> = results.into_iter().flatten().collect();
-            results?;
-            Ok(())
-        });
-
-        tokio::try_join!(flatten(handle), flatten(for_each_handle))?;
-        Ok(())
+        }
     }
 
     pub(crate) async fn get_prs(
@@ -240,10 +229,18 @@ impl GithubApi {
     }
 }
 
-async fn flatten(handle: JoinHandle<Result<(), GithubApiError>>) -> Result<(), GithubApiError> {
-    match handle.await {
-        Ok(Ok(result)) => Ok(result),
-        Ok(Err(err)) => Err(err),
-        Err(err) => Err(err.into()),
+async fn handle_ratelimit(remaining: Option<HeaderValue>, reset: Option<HeaderValue>) -> Result<(), GithubApiError> {
+    match (remaining, reset) {
+        (Some(remaining), Some(reset)) => {
+            let remaining: i32 = remaining.to_str()?.parse()?;
+            let reset: i64 = reset.to_str()?.parse()?;
+            if remaining == 0 {
+                let duration = Duration::from_secs((reset - Utc::now().timestamp() + 2) as u64);
+                info!("rate limit reached, sleeping for {}s", duration.as_secs());
+                sleep(duration).await;
+            }
+        }
+        (remaining, reset) => return Err(GithubApiError::MissingRateLimitHeaders(remaining, reset)),
     }
+    Ok(())
 }

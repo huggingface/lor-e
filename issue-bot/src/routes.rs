@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tracing::info;
 
-use crate::{errors::ApiError, Action, AppState, EventData, RepositoryData, Source};
+use crate::{
+    deserialize_null_default, errors::ApiError, Action, AppState, EventData, RepositoryData, Source,
+};
 
 fn compute_signature(payload: &[u8], secret: &str) -> String {
     let key = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
@@ -137,6 +139,7 @@ struct Issue {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct IssueData {
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     body: String,
     html_url: String,
     id: i64,
@@ -161,6 +164,7 @@ struct PullRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct PullRequestData {
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     body: String,
     html_url: String,
     id: i64,

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
+async-stream = "0.3"
 # axum = { version = "0.8", features = ["macros"] }
 axum = "0.8"
 # candle-nn = "0.8"
