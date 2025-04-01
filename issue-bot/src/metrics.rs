@@ -5,6 +5,8 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use tokio::net::TcpListener;
 use tracing::info;
 
+use crate::shutdown_signal;
+
 fn metrics_app(recorder_handle: PrometheusHandle, health: bool) -> Router {
     let mut router = Router::new().route("/metrics", get(move || ready(recorder_handle.render())));
     if health {
@@ -24,6 +26,8 @@ pub async fn start_metrics_server(
 
     info!(ip, port, "starting metrics server");
     let listener = TcpListener::bind(format!("{}:{}", ip, port)).await?;
-    axum::serve(listener, app.into_make_service()).await?;
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
 }

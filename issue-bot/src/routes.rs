@@ -1,9 +1,10 @@
-use std::fmt::Display;
+use std::{fmt::Display, sync::atomic::Ordering};
 
 use axum::{
     body::Body,
     extract::{FromRef, FromRequestParts, Request, State},
-    http::{request::Parts, HeaderName},
+    http::{request::Parts, HeaderName, StatusCode},
+    response::IntoResponse,
     routing::post,
     Json, Router,
 };
@@ -13,7 +14,8 @@ use sha2::Sha256;
 use tracing::info;
 
 use crate::{
-    deserialize_null_default, errors::ApiError, Action, AppState, EventData, RepositoryData, Source,
+    deserialize_null_default, errors::ApiError, Action, AppState, EventData, RepositoryData,
+    Source, PRE_SHUTDOWN,
 };
 
 fn compute_signature(payload: &[u8], secret: &str) -> String {
@@ -535,6 +537,14 @@ pub async fn index_repository(
 ) -> Result<(), ApiError> {
     state.tx.send(EventData::Indexation(repository)).await?;
     Ok(())
+}
+
+pub async fn health() -> impl IntoResponse {
+    if !PRE_SHUTDOWN.load(Ordering::SeqCst) {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
 }
 
 #[cfg(test)]

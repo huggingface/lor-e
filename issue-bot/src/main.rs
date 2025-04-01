@@ -1,10 +1,17 @@
-use std::{env, fmt::Display, sync::Once, time::Duration};
+use std::{
+    env,
+    fmt::Display,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Once,
+    },
+    time::Duration,
+};
 
 use axum::{
     error_handling::HandleErrorLayer,
     http::{Response, StatusCode},
     middleware,
-    response::IntoResponse,
     routing::{get, post},
     Router,
 };
@@ -17,7 +24,7 @@ use metrics::start_metrics_server;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use middlewares::RequestSpan;
 use pgvector::Vector;
-use routes::index_repository;
+use routes::{health, index_repository};
 use serde::{Deserialize, Deserializer};
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -26,6 +33,7 @@ use sqlx::{
 };
 use tokio::{
     net::TcpListener,
+    select, signal,
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
 };
@@ -142,7 +150,7 @@ fn app(state: AppState) -> Router {
                 .into_inner(),
         )
         .layer(middleware::from_fn(middlewares::add_request_id))
-        .route("/health", get(|| async { StatusCode::OK.into_response() }))
+        .route("/health", get(health))
         .with_state(state)
 }
 
@@ -151,7 +159,9 @@ async fn start_main_server(config: ServerConfig, state: AppState) -> anyhow::Res
     info!(addr, "starting server");
 
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, app(state)).await?;
+    axum::serve(listener, app(state))
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
 }
@@ -233,6 +243,19 @@ struct ClosestIssue {
     number: i32,
     html_url: String,
     cosine_similarity: f64,
+}
+
+async fn handle_webhooks_wrapper(
+    rx: Receiver<EventData>,
+    embedding_api: EmbeddingApi,
+    github_api: GithubApi,
+    huggingface_api: HuggingfaceApi,
+    pool: Pool<Postgres>,
+) -> anyhow::Result<()> {
+    select! {
+        res = handle_webhooks(rx, embedding_api, github_api, huggingface_api, pool) => { res },
+        _ = shutdown_signal() => { Ok(()) },
+    }
 }
 
 async fn handle_webhooks(
@@ -500,6 +523,36 @@ async fn handle_webhooks(
     Ok(())
 }
 
+pub static PRE_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    tracing::info!("Received termination signal shutting down");
+
+    PRE_SHUTDOWN.store(true, Ordering::SeqCst);
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_logging();
@@ -534,7 +587,7 @@ async fn main() -> anyhow::Result<()> {
             false,
             setup_metrics_recorder()
         ))),
-        handle_webhooks(rx, embedding_api, github_api, huggingface_api, pool)
+        handle_webhooks_wrapper(rx, embedding_api, github_api, huggingface_api, pool)
     )?;
 
     Ok(())
