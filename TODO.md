@@ -9,7 +9,7 @@
   - [x] on new comment or description edit, update values in db and (re)compute embedding
   - [x] on deletion, delete comment or issue/pr and update or remove embedding
 
-- [ ] script or endpoint to index existing issues for a repo
+- [x] script or endpoint to index existing issues for a repo
   - [ ] if github app, index repo on app install
 
 - [ ] move to github app
