@@ -19,10 +19,6 @@ CREATE TABLE IF NOT EXISTS issues (
   updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
 
-CREATE INDEX IF NOT EXISTS issues_source_id_idx ON issues (source_id);
-CREATE INDEX IF NOT EXISTS comments_source_id_idx ON comments (source_id);
-CREATE INDEX IF NOT EXISTS issues_embedding_hnsw_idx ON issues USING hnsw (embedding vector_cosine_ops);
-
 CREATE TABLE IF NOT EXISTS comments (
   id SERIAL PRIMARY KEY,
   source_id VARCHAR NOT NULL UNIQUE,
@@ -32,6 +28,10 @@ CREATE TABLE IF NOT EXISTS comments (
   created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
   updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
+
+CREATE INDEX IF NOT EXISTS issues_source_id_idx ON issues (source_id);
+CREATE INDEX IF NOT EXISTS comments_source_id_idx ON comments (source_id);
+CREATE INDEX IF NOT EXISTS issues_embedding_hnsw_idx ON issues USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS jobs (
   id SERIAL PRIMARY KEY,
