@@ -573,8 +573,9 @@ mod tests {
             tx,
         };
         let mut app = app(state);
-        let payload_body = r#"{"action":"opened","pull_request":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"url":"https://github.com/huggingface/lor-e/5"}}"#;
-        let sig = "sha256=a2754571daeaa409f7daaf295dc553ac9251ee97c9fe4de0f6deb02653a26136";
+
+        let payload_body = r#"{"action":"opened","pull_request":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}"#;
+        let sig = "sha256=0f66c678489c6ab39ba9b5a3dfcb957b2bf3b98aebf0872e8cebbc041ff71307";
 
         let response = app
             .borrow_mut()
@@ -591,11 +592,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let payload_body = r#"{"action":"submitted","review":{"body":"test review","id":1234,"url":"https://github.com/huggingface/lor-e/5#comment-123"},"pull_request":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"url":"https://github.com/huggingface/lor-e/5"}}"#;
-        let sig = "sha256=3e9f1ebb1c08ed75b6d6a174a28bd9771ee062623ad9f3118199e00922bf098d";
+        let payload_body = r#"{"action":"submitted","review":{"body":"test review","id":1234,"url":"https://github.com/huggingface/lor-e/5#comment-123"},"pull_request":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}"#;
+        let sig = "sha256=4a312de764757f5d18610c183602337f0c766791e8a886120302549c00988bba";
 
         let response = app
-            .borrow_mut()
             .oneshot(
                 Request::builder()
                     .method(axum::http::Method::POST)
@@ -619,15 +619,34 @@ mod tests {
             auth_token: auth_token.clone(),
             tx,
         };
-        let app = app(state);
-        let payload_body = r#"{"tmp":"bob"}"#;
+        let mut app = app(state);
+
+        let payload_body = r#"{"event":{"action":"create", "scope":"discussion"}, "discussion":{"id":"test", "isPullRequest":false, "num":1, "title":"my test issue","url":{"api":"https://huggingface.co/test", "web":"https://huggingface.co/test"}}}"#;
+
+        let response = app
+            .borrow_mut()
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::POST)
+                    .uri("/event/huggingface")
+                    .header("x-webhook-secret", &auth_token)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(payload_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let payload_body = r#"{"event":{"action":"create", "scope":"discussion.comment"}, "discussion":{"id":"test", "isPullRequest":false, "num":1, "title":"my test issue","url":{"api":"https://huggingface.co/test", "web":"https://huggingface.co/test"}}, "comment":{"id":"test", "content":"some comment", "author":{"id":"test"},"url":{"web":"https://huggingface.co/test"}}}"#;
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method(axum::http::Method::POST)
                     .uri("/event/huggingface")
-                    .header("x-webhook-secret", auth_token)
+                    .header("x-webhook-secret", &auth_token)
                     .header(CONTENT_TYPE, "application/json")
                     .body(Body::from(payload_body))
                     .unwrap(),
