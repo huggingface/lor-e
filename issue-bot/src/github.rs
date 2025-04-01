@@ -43,6 +43,7 @@ pub enum GithubApiError {
 
 #[derive(Debug, Deserialize)]
 struct PullRequest {
+    #[allow(unused)]
     url: String,
 }
 
@@ -220,13 +221,13 @@ impl GithubApi {
         }
     }
 
-    pub(crate) async fn get_prs(
-        &self,
-        repository: &RepositoryData,
-    ) -> Result<Vec<IssueWithComments>, GithubApiError> {
-        let issues = Vec::new();
-        Ok(issues)
-    }
+    // pub(crate) async fn get_prs(
+    //     &self,
+    //     repository: &RepositoryData,
+    // ) -> Result<Vec<IssueWithComments>, GithubApiError> {
+    //     let issues = Vec::new();
+    //     Ok(issues)
+    // }
 }
 
 async fn handle_ratelimit(remaining: Option<HeaderValue>, reset: Option<HeaderValue>) -> Result<(), GithubApiError> {

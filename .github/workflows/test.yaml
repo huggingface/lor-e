@@ -1,0 +1,51 @@
+name: Run basic tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    paths:
+      - ".github/workflows/build.yaml"
+      - ".github/workflows/test.yaml"
+      - "issue-bot/**"
+      - "rust-toolchain.toml"
+      - "Dockerfile"
+    branches:
+      - 'main'
+
+jobs:
+  tests:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: local
+          POSTGRES_PASSWORD: supersecurepassword
+        ports:
+          - 5432:5432
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Setup database
+        env:
+          PGPASSWORD: "supersecurepassword"
+        run: |
+         sudo apt-get update && sudo apt-get install libpq-dev -y
+         psql -U local -a -f init_db.sql -h localhost
+      - name: Run tests
+        env:
+          DATABASE_URL: "postgres://local:supersecurepassword@localhost:5432/lor_e"
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: |
+          cargo test
+        working-directory: ./issue-bot

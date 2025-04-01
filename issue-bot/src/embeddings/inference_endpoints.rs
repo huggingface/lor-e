@@ -10,6 +10,7 @@ use super::EmbeddingError;
 
 #[derive(Serialize)]
 enum TruncateDirection {
+    #[allow(unused)]
     Left,
     Right,
 }

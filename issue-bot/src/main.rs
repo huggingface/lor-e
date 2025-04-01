@@ -242,6 +242,7 @@ struct ClosestIssue {
     title: String,
     number: i32,
     html_url: String,
+    #[allow(unused)]
     cosine_similarity: f64,
 }
 

@@ -2,6 +2,7 @@ use config::{Config, ConfigError};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(unused)]
 pub struct ModelConfig {
     pub id: String,
     pub revision: String,
