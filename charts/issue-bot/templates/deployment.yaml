@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "issueBot.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lor_e.labels" . | nindent 4 }}
+    {{- include "lor_e.issueBotSelectorLabels" . | nindent 4 }}
+spec:
+  {{- if not .Values.issueBot.autoscaling.enabled }}
+  replicas: {{ .Values.issueBot.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "lor_e.issueBotSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations: {{ toYaml .Values.issueBot.podAnnotations  | nindent 8 }}
+      labels: {{- include "lor_e.issueBotSelectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "serviceAccount.name" . }}
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "lor_e.issueBotSelectorLabels" . | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "lor_e.issueBotSelectorLabels" . | nindent 14 }}
+      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: issue-bot
+        securityContext: {{- toYaml .Values.issueBot.securityContext | nindent 10 }}
+        image: {{ .Values.issueBot.image }}
+        imagePullPolicy: {{ .Values.issueBot.imagePullPolicy }}
+        env:
+        {{- range $name, $value := .Values.issueBot.env }}
+        - name: {{ $name }}
+          value: {{ $value | quote }}
+        {{- end }}
+        - name: ISSUE_BOT__GITHUB_API__AUTH_TOKEN
+          value: "{{ .Values.issueBot.githubApi.authToken }}"
+        - name: ISSUE_BOT__GITHUB_API__COMMENTS_ENABLED
+          value: "{{ .Values.issueBot.githubApi.commentsEnabled }}"
+        - name: ISSUE_BOT__HUGGINGFACE_API__AUTH_TOKEN
+          value: "{{ .Values.issueBot.huggingfaceApi.authToken }}"
+        - name: ISSUE_BOT__HUGGINGFACE_API__COMMENTS_ENABLED
+          value: "{{ .Values.issueBot.huggingfaceApi.commentsEnabled }}"
+        - name: ISSUE_BOT__MODEL_API__AUTH_TOKEN
+          value: "{{ .Values.issueBot.modelApi.authToken }}"
+        - name: ISSUE_BOT__MODEL_API__URL
+          value: "{{ .Values.issueBot.modelApi.url }}"
+        - name: ISSUE_BOT__DATABASE__CONNECTION_STRING
+          value: "{{ .Values.issueBot.databaseConnectionString }}"
+        ports:
+          - name: issue-bot-http
+            containerPort: {{ .Values.issueBot.containerPort }}
+            protocol: TCP
+          - name: issue-bot-metric
+            containerPort: {{ .Values.issueBot.metricsPort }}
+            protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: issue-bot-http
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: issue-bot-http
+        resources: {{- toYaml .Values.issueBot.resources | nindent 10 }}
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      affinity: {{ toYaml .Values.affinity | nindent 8 }}
+      tolerations: {{ toYaml .Values.tolerations | nindent 8 }}

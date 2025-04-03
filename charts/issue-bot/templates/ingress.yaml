@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  {{- $annotations := fromYaml (include "lor_e.issueBot.ingress.annotations" .) }}
+  annotations: {{ toYaml $annotations | nindent 4 }}
+  labels:
+    {{- include "lor_e.labels" . | nindent 4 }}
+    {{- include "lor_e.issueBotSelectorLabels" . | nindent 4 }}
+  name: {{ include "issueBot.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  rules:
+    {{- $name := (include "issueBot.fullname" .) -}}
+    {{- $domains := (include "lor_e.ingress.hostname" .) -}}
+    {{- range (split "\n" $domains) }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: issue-bot-http
+            path: {{ $.Values.issueBot.pathPrefix }}
+            pathType: Prefix
+    {{- end }}

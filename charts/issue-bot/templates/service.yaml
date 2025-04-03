@@ -1,0 +1,27 @@
+{{ $serviceType := .Values.issueBot.service.type }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "issueBot.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lor_e.labels" . | nindent 4 }}
+    {{- include "lor_e.issueBotSelectorLabels" . | nindent 4 }}
+spec:
+  type: {{ $serviceType }}
+  ports:
+    - port: {{ .Values.issueBot.service.port }}
+      targetPort: {{ .Values.issueBot.containerPort }}
+      protocol: TCP
+      {{- if eq "NodePort" $serviceType }}
+      nodePort: {{ .Values.issueBot.service.ports.api }}
+      {{- end }}
+      name: issue-bot-http
+    - port: {{ .Values.issueBot.service.metricsPort }}
+      targetPort: {{ .Values.issueBot.metricsPort }}
+      protocol: TCP
+      {{- if eq "NodePort" $serviceType }}
+      nodePort: {{ .Values.issueBot.service.ports.metrics }}
+      {{- end }}
+      name: issue-bot-metric
+  selector: {{- include "lor_e.issueBotSelectorLabels" . | nindent 4 }}

@@ -30,7 +30,7 @@
 
 ## Infra resilience tasks
 
-- [ ] helm chart for the issue bot
+- [x] helm chart for the issue bot
 - [ ] terraform code to deploy the cloudnativepg operator and the actual cluster's crd
 - [ ] secret mgmt
 

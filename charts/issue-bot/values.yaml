@@ -1,0 +1,34 @@
+issueBot:
+  autoscaling:
+    enabled: false
+  replicaCount: 1
+  image: ghcr.io/huggingface/lor-e:latest
+  imagePullPolicy: IfNotPresent
+  databaseConnectionString: ""
+  githubApi:
+    authToken: ""
+    commentsEnabled: true
+  huggingfaceApi:
+    authToken: ""
+    commentsEnabled: true
+  modelApi:
+    url: ""
+    authToken: ""
+  pathPrefix: /
+  ingress:
+    annotations: {}
+    domain: ""
+  containerPort: 4242
+  metricsPort: 4243
+  service:
+    type: NodePort
+    ports:
+      api: 31000
+      metrics: 31001
+  securityContext: {}
+  podAnnotations: {}
+
+serviceAccount:
+  annotations: {}
+
+podSecurityContext: {}

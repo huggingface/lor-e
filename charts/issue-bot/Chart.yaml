@@ -1,0 +1,8 @@
+apiVersion: v2
+name: lor-e
+description: LOR-E Chart
+type: application
+icon: https://huggingface.co/front/assets/huggingface_logo-noborder.svg
+
+appVersion: "0.1.0"
+version: 0.0.1
