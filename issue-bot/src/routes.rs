@@ -506,7 +506,7 @@ pub async fn huggingface_webhook(
                     )))
                 }
             };
-            // check if comment is from `lor-e-bot`
+            // NOTE: check if comment is from `lor-e-bot`
             if comment.author.id != "67e0825265e294ad98833748" {
                 state
                     .tx

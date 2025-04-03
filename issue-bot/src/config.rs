@@ -43,11 +43,13 @@ pub struct ServerConfig {
 #[derive(Debug, Deserialize)]
 pub struct GithubApiConfig {
     pub auth_token: String,
+    pub comments_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct HuggingfaceApiConfig {
     pub auth_token: String,
+    pub comments_enabled: bool,
 }
 
 /// bot's comment message

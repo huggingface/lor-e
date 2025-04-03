@@ -6,9 +6,11 @@ database:
 
 github_api:
   auth_token: ""
+  comments_enabled: false
 
 huggingface_api:
   auth_token: ""
+  comments_enabled: false
 
 message_config:
   pre: "Hello!\n\nA maintainer will soon take a look, in the meantime you might find these related issues interesting:\n"

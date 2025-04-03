@@ -103,6 +103,7 @@ struct CommentBody {
 #[derive(Clone)]
 pub struct GithubApi {
     client: Client,
+    comments_enabled: bool,
     message_config: MessageConfig,
 }
 
@@ -144,6 +145,7 @@ impl GithubApi {
 
         Ok(Self {
             client,
+            comments_enabled: cfg.comments_enabled,
             message_config,
         })
     }
@@ -153,6 +155,10 @@ impl GithubApi {
         issue_url: &str,
         closest_issues: Vec<ClosestIssue>,
     ) -> Result<(), GithubApiError> {
+        if !self.comments_enabled {
+            return Ok(());
+        }
+
         let comment_url = format!("{issue_url}/comments");
         let issues: Vec<String> = closest_issues
             .into_iter()

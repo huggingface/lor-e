@@ -296,6 +296,7 @@ async fn handle_webhooks(
                             }
                             _ => (),
                         }
+                        // TODO: send slack message
 
                         sqlx::query(
                         r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding)
@@ -388,7 +389,6 @@ async fn handle_webhooks(
                     source = repository.source.to_string()
                 );
                 info!(parent: &span, "indexing started");
-                let github_api = github_api.clone();
                 let from_page = sqlx::query!(
                     "select page from jobs where repository_id = $1",
                     repository.repo_id

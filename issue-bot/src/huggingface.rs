@@ -27,6 +27,7 @@ struct CommentBody {
 
 pub struct HuggingfaceApi {
     client: Client,
+    comments_enabled: bool,
     message_config: MessageConfig,
 }
 
@@ -46,6 +47,7 @@ impl HuggingfaceApi {
 
         Ok(Self {
             client,
+            comments_enabled: cfg.comments_enabled,
             message_config,
         })
     }
@@ -55,6 +57,10 @@ impl HuggingfaceApi {
         issue_url: &str,
         closest_issues: Vec<ClosestIssue>,
     ) -> Result<(), HuggingfaceApiError> {
+        if !self.comments_enabled {
+            return Ok(());
+        }
+
         let comment_url = format!("{issue_url}/comment");
         let issues: Vec<String> = closest_issues
             .into_iter()

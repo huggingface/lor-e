@@ -1,5 +1,9 @@
 # Priorities
 
+- [ ] deploy issue-bot to k8s manually
+  - [x] for now deploy w/out publishing comments
+  - [ ] instead publish to slack channel for reviewing and finetuning
+
 - [x] on open issue event, do retrieval and suggest 3/5 closest issues / prs
 - [x] on open discussion event, do retrieval and suggest 3/5 closest issues / prs
 
@@ -23,6 +27,12 @@
 - [x] fix github issue link (currently `api.github.com` instead of the regular github UI url)
 
 - [x] fix: delete associated comments, reviews & review comments
+
+## Infra resilience tasks
+
+- [ ] helm chart for the issue bot
+- [ ] terraform code to deploy the cloudnativepg operator and the actual cluster's crd
+- [ ] secret mgmt
 
 # Ideas
 
