@@ -18,6 +18,7 @@ issueBot:
   pathPrefix: /
   ingress:
     annotations: {}
+    className: ""
     domain: ""
   containerPort: 4242
   metricsPort: 4243

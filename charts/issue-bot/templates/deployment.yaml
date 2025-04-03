@@ -61,20 +61,20 @@ spec:
         - name: ISSUE_BOT__DATABASE__CONNECTION_STRING
           value: "{{ .Values.issueBot.databaseConnectionString }}"
         ports:
-          - name: issue-bot-http
+          - name: ib-api
             containerPort: {{ .Values.issueBot.containerPort }}
             protocol: TCP
-          - name: issue-bot-metric
+          - name: ib-metric
             containerPort: {{ .Values.issueBot.metricsPort }}
             protocol: TCP
         livenessProbe:
           httpGet:
             path: /health
-            port: issue-bot-http
+            port: ib-api
         readinessProbe:
           httpGet:
             path: /health
-            port: issue-bot-http
+            port: ib-api
         resources: {{- toYaml .Values.issueBot.resources | nindent 10 }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       affinity: {{ toYaml .Values.affinity | nindent 8 }}

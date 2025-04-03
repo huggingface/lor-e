@@ -10,18 +10,18 @@ metadata:
 spec:
   type: {{ $serviceType }}
   ports:
-    - port: {{ .Values.issueBot.service.port }}
+    - port: {{ .Values.issueBot.service.ports.api }}
       targetPort: {{ .Values.issueBot.containerPort }}
       protocol: TCP
       {{- if eq "NodePort" $serviceType }}
       nodePort: {{ .Values.issueBot.service.ports.api }}
       {{- end }}
-      name: issue-bot-http
-    - port: {{ .Values.issueBot.service.metricsPort }}
+      name: ib-api
+    - port: {{ .Values.issueBot.service.ports.metrics }}
       targetPort: {{ .Values.issueBot.metricsPort }}
       protocol: TCP
       {{- if eq "NodePort" $serviceType }}
       nodePort: {{ .Values.issueBot.service.ports.metrics }}
       {{- end }}
-      name: issue-bot-metric
+      name: ib-metric
   selector: {{- include "lor_e.issueBotSelectorLabels" . | nindent 4 }}

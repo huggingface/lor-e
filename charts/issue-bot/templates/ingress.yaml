@@ -9,6 +9,7 @@ metadata:
   name: {{ include "issueBot.fullname" . }}
   namespace: {{ .Release.Namespace }}
 spec:
+  ingressClassName: {{ .Values.issueBot.ingress.className }}
   rules:
     {{- $name := (include "issueBot.fullname" .) -}}
     {{- $domains := (include "lor_e.ingress.hostname" .) -}}
@@ -20,7 +21,7 @@ spec:
               service:
                 name: {{ $name }}
                 port:
-                  name: issue-bot-http
+                  name: ib-api
             path: {{ $.Values.issueBot.pathPrefix }}
             pathType: Prefix
     {{- end }}
