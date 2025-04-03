@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use hmac::{Hmac, Mac};
+use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tracing::info;
@@ -356,7 +357,7 @@ where
             return Err(ApiError::Auth);
         }
 
-        Ok(HfWebhookSecretValidator)
+        Ok(Self)
     }
 }
 
@@ -530,8 +531,34 @@ pub fn event_router() -> Router<AppState> {
         .route("/huggingface", post(huggingface_webhook))
 }
 
+pub struct SecretValidator;
+
+impl<S> FromRequestParts<S> for SecretValidator
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let state = AppState::from_ref(state);
+        let secret = parts
+            .headers
+            .get(AUTHORIZATION)
+            .cloned()
+            .ok_or(ApiError::Auth)?;
+
+        if secret != state.auth_token {
+            return Err(ApiError::Auth);
+        }
+
+        Ok(Self)
+    }
+}
+
 // TODO: create job table and reply id?
 pub async fn index_repository(
+    SecretValidator: SecretValidator,
     State(state): State<AppState>,
     Json(repository): Json<RepositoryData>,
 ) -> Result<(), ApiError> {

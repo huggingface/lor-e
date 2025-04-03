@@ -5,6 +5,7 @@ issueBot:
   image: ghcr.io/huggingface/lor-e:latest
   imagePullPolicy: IfNotPresent
   databaseConnectionString: ""
+  authToken: ""
   githubApi:
     authToken: ""
     commentsEnabled: true

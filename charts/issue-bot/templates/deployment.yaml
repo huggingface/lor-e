@@ -44,6 +44,8 @@ spec:
         - name: {{ $name }}
           value: {{ $value | quote }}
         {{- end }}
+        - name: ISSUE_BOT__AUTH_TOKEN
+          value: "{{ .Values.issueBot.authToken }}"
         - name: ISSUE_BOT__GITHUB_API__AUTH_TOKEN
           value: "{{ .Values.issueBot.githubApi.authToken }}"
         - name: ISSUE_BOT__GITHUB_API__COMMENTS_ENABLED
