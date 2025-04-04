@@ -53,29 +53,6 @@ impl Display for CommentActionType {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ReviewActionType {
-    Dismissed,
-    Edited,
-    Submitted,
-}
-impl ReviewActionType {
-    fn to_action(&self) -> Action {
-        match self {
-            Self::Submitted => Action::Created,
-            Self::Edited => Action::Edited,
-            Self::Dismissed => unreachable!("ReviewActionType::to_action called with Dismissed"),
-        }
-    }
-}
-
-impl Display for ReviewActionType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.serialize(f)
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 enum IssueActionType {
     Opened,
     Edited,
@@ -102,35 +79,15 @@ impl Display for IssueActionType {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum PullRequestActionType {
-    Opened,
-    Edited,
-    /// We don't care about other action types
-    #[serde(other)]
-    Ignored,
-}
-
-impl PullRequestActionType {
-    fn to_action(&self) -> Action {
-        match self {
-            Self::Opened => Action::Created,
-            Self::Edited => Action::Edited,
-            Self::Ignored => unreachable!("PullRequestActionType::to_action called with Ignored"),
-        }
-    }
-}
-
-impl Display for PullRequestActionType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.serialize(f)
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
 struct Comment {
     body: String,
     id: i64,
+    url: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PullRequest {
+    html_url: String,
     url: String,
 }
 
@@ -147,6 +104,7 @@ struct IssueData {
     html_url: String,
     id: i64,
     number: i32,
+    pull_request: Option<PullRequest>,
     title: String,
     url: String,
 }
@@ -160,51 +118,10 @@ struct IssueComment {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct PullRequest {
-    action: PullRequestActionType,
-    pull_request: PullRequestData,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PullRequestData {
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    body: String,
-    html_url: String,
-    id: i64,
-    number: i32,
-    title: String,
-    url: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Review {
-    body: String,
-    id: i64,
-    url: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct PullRequestReview {
-    action: ReviewActionType,
-    pull_request: PullRequestData,
-    review: Review,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PullRequestReviewComment {
-    action: CommentActionType,
-    comment: Comment,
-    pull_request: PullRequestData,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum GithubWebhook {
     IssueComment(IssueComment),
     Issue(Issue),
-    PullRequestReviewComment(PullRequestReviewComment),
-    PullRequestReview(PullRequestReview),
-    PullRequest(PullRequest),
 }
 
 impl Display for GithubWebhook {
@@ -212,9 +129,6 @@ impl Display for GithubWebhook {
         let webhook_type = match self {
             Self::Issue(_) => "issue",
             Self::IssueComment(_) => "issue comment",
-            Self::PullRequest(_) => "pull request",
-            Self::PullRequestReview(_) => "pull request review",
-            Self::PullRequestReviewComment(_) => "pull request review comment",
         };
         write!(f, "{}", webhook_type)
     }
@@ -252,7 +166,7 @@ pub async fn github_webhook(
                             action: issue.action.to_action(),
                             title: issue.issue.title,
                             body: issue.issue.body,
-                            is_pull_request: false,
+                            is_pull_request: issue.issue.pull_request.is_some(),
                             number: issue.issue.number,
                             html_url: issue.issue.html_url,
                             url: issue.issue.url,
@@ -270,59 +184,6 @@ pub async fn github_webhook(
                 .send(EventData::Comment(crate::CommentData {
                     source_id: comment.comment.id.to_string(),
                     issue_id: comment.issue.id.to_string(),
-                    action: comment.action.to_action(),
-                    body: comment.comment.body,
-                    url: comment.comment.url,
-                }))
-                .await?;
-        }
-        GithubWebhook::PullRequest(pr) => {
-            info!("received {} (state: {})", webhook_type, pr.action);
-            match pr.action {
-                PullRequestActionType::Opened | PullRequestActionType::Edited => {
-                    state
-                        .tx
-                        .send(EventData::Issue(crate::IssueData {
-                            source_id: pr.pull_request.id.to_string(),
-                            action: pr.action.to_action(),
-                            title: pr.pull_request.title,
-                            body: pr.pull_request.body,
-                            is_pull_request: true,
-                            number: pr.pull_request.number,
-                            html_url: pr.pull_request.html_url,
-                            url: pr.pull_request.url,
-                            source: Source::Github,
-                        }))
-                        .await?
-                }
-                PullRequestActionType::Ignored => (),
-            }
-        }
-        GithubWebhook::PullRequestReview(review) => {
-            info!("received {} (state: {})", webhook_type, review.action);
-            match review.action {
-                ReviewActionType::Submitted | ReviewActionType::Edited => {
-                    state
-                        .tx
-                        .send(EventData::Comment(crate::CommentData {
-                            source_id: review.review.id.to_string(),
-                            issue_id: review.pull_request.id.to_string(),
-                            action: review.action.to_action(),
-                            body: review.review.body,
-                            url: review.review.url,
-                        }))
-                        .await?
-                }
-                ReviewActionType::Dismissed => (),
-            }
-        }
-        GithubWebhook::PullRequestReviewComment(comment) => {
-            info!("received {} (state: {})", webhook_type, comment.action);
-            state
-                .tx
-                .send(EventData::Comment(crate::CommentData {
-                    source_id: comment.comment.id.to_string(),
-                    issue_id: comment.pull_request.id.to_string(),
                     action: comment.action.to_action(),
                     body: comment.comment.body,
                     url: comment.comment.url,
