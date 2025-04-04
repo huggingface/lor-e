@@ -2,7 +2,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::{config::SlackConfig, ClosestIssue};
+use crate::{config::SlackConfig, ClosestIssue, IssueData};
 
 #[derive(Debug, Error)]
 pub enum SlackError {
@@ -55,17 +55,18 @@ impl Slack {
 
     pub async fn closest_issues(
         &self,
-        issue_title: &str,
-        issue_number: i32,
-        issue_html_url: &str,
+        issue: &IssueData,
         closest_issues: &[ClosestIssue],
     ) -> Result<(), SlackError> {
         let mut msg = vec![format!(
-            "Closest issues for {} <{}|#{}>",
-            issue_title, issue_number, issue_html_url
+            "Closest issues for {} <{}|#{}>:\n```{}```",
+            issue.title, issue.number, issue.html_url, issue.body
         )];
         for ci in closest_issues {
-            msg.push(format!("- {} (<{}|#{}>)", ci.title, ci.html_url, ci.number));
+            msg.push(format!(
+                "- {} (<{}|#{}>):\n```{}```",
+                ci.title, ci.html_url, ci.number, ci.body
+            ));
         }
         let body = SlackBody::new(&self.channel, msg.join("\n"));
         self.client

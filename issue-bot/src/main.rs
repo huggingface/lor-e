@@ -244,6 +244,7 @@ struct ClosestIssue {
     title: String,
     number: i32,
     html_url: String,
+    body: String,
     #[allow(unused)]
     cosine_similarity: f64,
 }
@@ -281,20 +282,13 @@ async fn handle_webhooks(
                             Vector::from(embedding_api.generate_embedding(issue_text).await?);
 
                         let closest_issues: Vec<ClosestIssue> = sqlx::query_as(
-                            "select title, number, html_url, 1 - (embedding <=> $1) as cosine_similarity from issues order by embedding <=> $1 LIMIT 3",
+                            "select title, number, html_url, body, 1 - (embedding <=> $1) as cosine_similarity from issues order by embedding <=> $1 LIMIT 3",
                         )
                             .bind(embedding.clone())
                             .fetch_all(&pool)
                             .await?;
 
-                        slack
-                            .closest_issues(
-                                &issue.title,
-                                issue.number,
-                                &issue.html_url,
-                                &closest_issues,
-                            )
-                            .await?;
+                        slack.closest_issues(&issue, &closest_issues).await?;
 
                         match (issue.is_pull_request, &issue.source) {
                             (false, Source::Github) => {
