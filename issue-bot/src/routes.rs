@@ -104,6 +104,7 @@ struct IssueData {
     html_url: String,
     id: i64,
     number: i32,
+    #[serde(default)]
     pull_request: Option<PullRequest>,
     title: String,
     url: String,
@@ -462,8 +463,8 @@ mod tests {
         };
         let mut app = app(state);
 
-        let payload_body = r#"{"action":"opened","pull_request":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}"#;
-        let sig = "sha256=0f66c678489c6ab39ba9b5a3dfcb957b2bf3b98aebf0872e8cebbc041ff71307";
+        let payload_body = r#"{"action":"opened","issue":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}"#;
+        let sig = "sha256=930e7b9a7cca3f85bc49a693f1d9105ca32bb15f13cda8871aaf79bba27c48cc";
 
         let response = app
             .borrow_mut()
@@ -480,8 +481,8 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let payload_body = r#"{"action":"submitted","review":{"body":"test review","id":1234,"url":"https://github.com/huggingface/lor-e/5#comment-123"},"pull_request":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}"#;
-        let sig = "sha256=4a312de764757f5d18610c183602337f0c766791e8a886120302549c00988bba";
+        let payload_body = r#"{"action":"created","comment":{"body":"test review","id":1234,"url":"https://github.com/huggingface/lor-e/5#comment-123"}, "issue":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}"#;
+        let sig = "sha256=cb81358e382b98e54789541ec9deeef909d89437311b9c626b13b40662f5ef52";
 
         let response = app
             .oneshot(

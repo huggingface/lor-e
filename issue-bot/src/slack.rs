@@ -59,14 +59,11 @@ impl Slack {
         closest_issues: &[ClosestIssue],
     ) -> Result<(), SlackError> {
         let mut msg = vec![format!(
-            "Closest issues for {} <{}|#{}>:\n```{}```",
-            issue.title, issue.number, issue.html_url, issue.body
+            "Closest issues for {} (<{}|#{}>):\n```{}```",
+            issue.title, issue.html_url, issue.number, issue.body
         )];
         for ci in closest_issues {
-            msg.push(format!(
-                "- {} (<{}|#{}>):\n```{}```",
-                ci.title, ci.html_url, ci.number, ci.body
-            ));
+            msg.push(format!("- {} (<{}|#{}>)", ci.title, ci.html_url, ci.number));
         }
         let body = SlackBody::new(&self.channel, msg.join("\n"));
         self.client

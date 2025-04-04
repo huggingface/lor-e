@@ -17,7 +17,7 @@ use axum::{
 };
 use config::{load_config, IssueBotConfig, ServerConfig};
 use embeddings::inference_endpoints::EmbeddingApi;
-use futures::{pin_mut, StreamExt};
+use futures::{pin_mut, TryStreamExt};
 use github::GithubApi;
 use huggingface::HuggingfaceApi;
 use metrics::start_metrics_server;
@@ -30,6 +30,7 @@ use slack::Slack;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     prelude::FromRow,
+    types::Json,
     Pool, Postgres, QueryBuilder,
 };
 use tokio::{
@@ -244,9 +245,18 @@ struct ClosestIssue {
     title: String,
     number: i32,
     html_url: String,
-    body: String,
     #[allow(unused)]
     cosine_similarity: f64,
+}
+
+#[derive(Debug, Deserialize, FromRow)]
+struct JobData {
+    issues_page: i32,
+}
+
+#[derive(Debug, FromRow)]
+struct Job {
+    data: Json<JobData>,
 }
 
 async fn handle_webhooks_wrapper(
@@ -282,7 +292,7 @@ async fn handle_webhooks(
                             Vector::from(embedding_api.generate_embedding(issue_text).await?);
 
                         let closest_issues: Vec<ClosestIssue> = sqlx::query_as(
-                            "select title, number, html_url, body, 1 - (embedding <=> $1) as cosine_similarity from issues order by embedding <=> $1 LIMIT 3",
+                            "select title, number, html_url, 1 - (embedding <=> $1) as cosine_similarity from issues order by embedding <=> $1 LIMIT 3",
                         )
                             .bind(embedding.clone())
                             .fetch_all(&pool)
@@ -395,17 +405,17 @@ async fn handle_webhooks(
                     source = repository.source.to_string()
                 );
                 info!(parent: &span, "indexing started");
-                let from_page = sqlx::query!(
-                    "select page from jobs where repository_id = $1",
+                let job = sqlx::query_as!(
+                    Job,
+                    r#"select data as "data: Json<JobData>" from jobs where repository_id = $1"#,
                     repository.repo_id
                 )
-                .map(|row| row.page + 1)
                 .fetch_optional(&pool)
                 .await?;
-                let issues = github_api.get_issues(from_page, repository.clone());
+                let from_issues_page = job.as_ref().map(|j| j.data.issues_page + 1).unwrap_or(1);
+                let issues = github_api.get_issues(from_issues_page, repository.clone());
                 pin_mut!(issues);
-                while let Some(issue) = issues.next().await {
-                    let (issue, page) = issue?;
+                while let Some((issue, page)) = issues.try_next().await? {
                     let embedding_api = embedding_api.clone();
                     let pool = pool.clone();
                     let source = repository.source.to_string();
@@ -461,19 +471,19 @@ async fn handle_webhooks(
                         qb.build().execute(&pool).await?;
                     }
                     if let Some(page) = page {
-                        sqlx::query!(
-                            r#"insert into jobs (repository_id, page)
-                               values ($1, $2)
+                        sqlx::query(
+                                r#"insert into jobs (repository_id, data)
+                               values ($1, jsonb_build_object('issues_page', $2))
                                on conflict (repository_id)
                                do update
                                set
-                                   page = excluded.page,
+                                   data = jsonb_set(jobs.data, '{issues_page}', to_jsonb($2::int), true),
                                    updated_at = current_timestamp"#,
-                            repository.repo_id,
-                            page,
-                        )
-                        .execute(&pool)
-                        .await?;
+                            )
+                            .bind(&repository.repo_id)
+                            .bind(page)
+                            .execute(&pool)
+                            .await?;
                     }
                 }
                 sqlx::query!(

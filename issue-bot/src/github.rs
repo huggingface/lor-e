@@ -42,8 +42,9 @@ pub enum GithubApiError {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(unused)]
 struct PullRequest {
-    #[allow(unused)]
+    html_url: String,
     url: String,
 }
 
@@ -180,13 +181,13 @@ impl GithubApi {
 
     pub(crate) fn get_issues(
         &self,
-        from_page: Option<i32>,
+        from_page: i32,
         repository: RepositoryData,
     ) -> impl Stream<Item = Result<(IssueWithComments, Option<i32>), GithubApiError>> + use<'_> {
         try_stream! {
             let url = format!("https://api.github.com/repos/{}/issues", repository.repo_id);
             let client = self.client.clone();
-            let mut page = from_page.unwrap_or(1);
+            let mut page = from_page;
             loop {
                 let res = client
                     .get(&url)
@@ -206,7 +207,6 @@ impl GithubApi {
                 if get_next_page(link_header)?.is_none() {
                     break;
                 }
-                let issues: Vec<Issue> = issues.into_iter().filter(|i| i.pull_request.is_none()).collect();
                 let page_issue_count = issues.len();
                 for (i, issue) in issues.into_iter().enumerate() {
                     let res = client
@@ -226,14 +226,6 @@ impl GithubApi {
             }
         }
     }
-
-    // pub(crate) async fn get_prs(
-    //     &self,
-    //     repository: &RepositoryData,
-    // ) -> Result<Vec<IssueWithComments>, GithubApiError> {
-    //     let issues = Vec::new();
-    //     Ok(issues)
-    // }
 }
 
 async fn handle_ratelimit(remaining: Option<HeaderValue>, reset: Option<HeaderValue>) -> Result<(), GithubApiError> {

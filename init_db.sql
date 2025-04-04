@@ -36,7 +36,7 @@ CREATE INDEX IF NOT EXISTS issues_embedding_hnsw_idx ON issues USING hnsw (embed
 CREATE TABLE IF NOT EXISTS jobs (
   id SERIAL PRIMARY KEY,
   repository_id VARCHAR NOT NULL UNIQUE,
-  page INT NOT NULL,
+  data JSONB NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
   updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );

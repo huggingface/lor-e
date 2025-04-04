@@ -3,7 +3,7 @@ import hmac
 
 
 secret = "tmpsecret"
-payload_body_string = '{"action":"submitted","review":{"body":"test review","id":1234,"url":"https://github.com/huggingface/lor-e/5#comment-123"},"pull_request":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}'
+payload_body_string = '{"action":"created","comment":{"body":"test review","id":1234,"url":"https://github.com/huggingface/lor-e/5#comment-123"}, "issue":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}'
 
 
 def generate_signature(payload_body, secret_token):
