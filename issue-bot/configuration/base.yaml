@@ -30,3 +30,8 @@ server:
   ip: 0.0.0.0
   metrics_port: 4243
   port: 4242
+
+slack:
+  auth_token: ""
+  channel: ""
+  chat_write_url: https://slack.com/api/chat.postMessage

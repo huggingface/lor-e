@@ -15,6 +15,9 @@ issueBot:
   modelApi:
     url: ""
     authToken: ""
+  slack:
+    authToken: ""
+    channel: ""
   pathPrefix: /
   ingress:
     annotations: {}

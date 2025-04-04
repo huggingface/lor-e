@@ -73,6 +73,13 @@ pub struct MessageConfig {
     pub post: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct SlackConfig {
+    pub auth_token: String,
+    pub channel: String,
+    pub chat_write_url: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct IssueBotConfig {
     pub auth_token: String,
@@ -82,6 +89,7 @@ pub struct IssueBotConfig {
     pub message_config: MessageConfig,
     pub model_api: ModelApiConfig,
     pub server: ServerConfig,
+    pub slack: SlackConfig,
 }
 
 pub fn load_config<'de, T: Deserialize<'de>>(prefix: &str) -> Result<T, ConfigError> {

@@ -58,6 +58,10 @@ spec:
           value: "{{ .Values.issueBot.modelApi.authToken }}"
         - name: ISSUE_BOT__MODEL_API__URL
           value: "{{ .Values.issueBot.modelApi.url }}"
+        - name: ISSUE_BOT__SLACK__AUTH_TOKEN
+          value: "{{ .Values.issueBot.slack.authToken }}"
+        - name: ISSUE_BOT__SLACK__CHANNEL
+          value: "{{ .Values.issueBot.slack.channel }}"
         - name: ISSUE_BOT__DATABASE__CONNECTION_STRING
           value: "{{ .Values.issueBot.databaseConnectionString }}"
         ports:

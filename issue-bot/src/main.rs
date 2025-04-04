@@ -26,6 +26,7 @@ use middlewares::RequestSpan;
 use pgvector::Vector;
 use routes::{health, index_repository};
 use serde::{Deserialize, Deserializer};
+use slack::Slack;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     prelude::FromRow,
@@ -50,6 +51,7 @@ mod huggingface;
 mod metrics;
 mod middlewares;
 mod routes;
+mod slack;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -251,10 +253,11 @@ async fn handle_webhooks_wrapper(
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
+    slack: Slack,
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     select! {
-        res = handle_webhooks(rx, embedding_api, github_api, huggingface_api, pool) => { res },
+        res = handle_webhooks(rx, embedding_api, github_api, huggingface_api, slack, pool) => { res },
         _ = shutdown_signal() => { Ok(()) },
     }
 }
@@ -264,6 +267,7 @@ async fn handle_webhooks(
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
+    slack: Slack,
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     while let Some(webhook_data) = rx.recv().await {
@@ -283,6 +287,15 @@ async fn handle_webhooks(
                             .fetch_all(&pool)
                             .await?;
 
+                        slack
+                            .closest_issues(
+                                &issue.title,
+                                issue.number,
+                                &issue.html_url,
+                                &closest_issues,
+                            )
+                            .await?;
+
                         match (issue.is_pull_request, &issue.source) {
                             (false, Source::Github) => {
                                 github_api
@@ -296,7 +309,6 @@ async fn handle_webhooks(
                             }
                             _ => (),
                         }
-                        // TODO: send slack message
 
                         sqlx::query(
                         r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding)
@@ -569,6 +581,7 @@ async fn main() -> anyhow::Result<()> {
     let embedding_api = EmbeddingApi::new(config.model_api).await?;
     let github_api = GithubApi::new(config.github_api, config.message_config.clone())?;
     let huggingface_api = HuggingfaceApi::new(config.huggingface_api, config.message_config)?;
+    let slack = Slack::new(&config.slack)?;
 
     let (tx, rx) = mpsc::channel(4_096);
 
@@ -588,7 +601,7 @@ async fn main() -> anyhow::Result<()> {
             false,
             setup_metrics_recorder()
         ))),
-        handle_webhooks_wrapper(rx, embedding_api, github_api, huggingface_api, pool)
+        handle_webhooks_wrapper(rx, embedding_api, github_api, huggingface_api, slack, pool)
     )?;
 
     Ok(())
