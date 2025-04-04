@@ -1,8 +1,8 @@
 # Priorities
 
-- [ ] deploy issue-bot to k8s manually
+- [x] deploy issue-bot to k8s manually
   - [x] for now deploy w/out publishing comments
-  - [ ] instead publish to slack channel for reviewing and finetuning
+  - [x] instead publish to slack channel for reviewing and finetuning
 
 - [x] on open issue event, do retrieval and suggest 3/5 closest issues / prs
 - [x] on open discussion event, do retrieval and suggest 3/5 closest issues / prs
