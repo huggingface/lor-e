@@ -17,7 +17,7 @@ use axum::{
 };
 use config::{load_config, IssueBotConfig, ServerConfig};
 use embeddings::inference_endpoints::EmbeddingApi;
-use futures::{pin_mut, TryStreamExt};
+use futures::{pin_mut, StreamExt};
 use github::GithubApi;
 use huggingface::HuggingfaceApi;
 use metrics::start_metrics_server;
@@ -41,7 +41,7 @@ use tokio::{
 };
 use tower::{BoxError, ServiceBuilder};
 use tower_http::trace::TraceLayer;
-use tracing::{info, info_span, Span};
+use tracing::{error, info, info_span, Instrument, Span};
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -399,48 +399,80 @@ async fn handle_webhooks(
                 }
             }
             EventData::Indexation(repository) => {
+                let embedding_api = embedding_api.clone();
+                let github_api = github_api.clone();
+                let pool = pool.clone();
                 let span = info_span!(
                     "indexation",
                     repository_id = repository.repo_id,
                     source = repository.source.to_string()
                 );
-                info!(parent: &span, "indexing started");
-                let job = sqlx::query_as!(
-                    Job,
-                    r#"select data as "data: Json<JobData>" from jobs where repository_id = $1"#,
-                    repository.repo_id
-                )
-                .fetch_optional(&pool)
-                .await?;
-                let from_issues_page = job.as_ref().map(|j| j.data.issues_page + 1).unwrap_or(1);
-                let issues = github_api.get_issues(from_issues_page, repository.clone());
-                pin_mut!(issues);
-                while let Some((issue, page)) = issues.try_next().await? {
-                    let embedding_api = embedding_api.clone();
-                    let pool = pool.clone();
-                    let source = repository.source.to_string();
-                    let comment_string = format!(
-                        "\n----\nComment: {}",
-                        issue
-                            .comments
-                            .iter()
-                            .map(|c| c.body.to_owned())
-                            .collect::<Vec<String>>()
-                            .join("\n----\nComment: ")
-                    );
-                    let issue_text = format!("# {}\n{}{}", issue.title, issue.body, comment_string);
-                    let embedding =
-                        Vector::from(embedding_api.generate_embedding(issue_text).await?);
-                    let issue_id: Option<i32> = sqlx::query_scalar!(
-                        "select id from issues where source_id = $1",
-                        issue.id.to_string()
+                tokio::spawn(async move {
+                    info!("indexing started");
+                    let job = match sqlx::query_as!(
+                        Job,
+                        r#"select data as "data: Json<JobData>" from jobs where repository_id = $1"#,
+                        repository.repo_id
                     )
                     .fetch_optional(&pool)
-                    .await?;
-                    let issue_id = if let Some(id) = issue_id {
-                        id
-                    } else {
-                        sqlx::query_scalar(
+                    .await {
+                        Ok(job) => job,
+                        Err(err) => {
+                            error!(err = err.to_string(), "error fetching job");
+                            return;
+                        }
+                    };
+                    let from_issues_page =
+                        job.as_ref().map(|j| j.data.issues_page + 1).unwrap_or(1);
+                    let issues = github_api.get_issues(from_issues_page, repository.clone());
+                    pin_mut!(issues);
+                    while let Some(issue) = issues.next().await {
+                        let (issue, page) = match issue {
+                            Ok(issue) => issue,
+                            Err(err) => {
+                                error!(err = err.to_string(), "error fetching next item from issues stream");
+                                continue;
+                            }
+                        };
+                        let embedding_api = embedding_api.clone();
+                        let pool = pool.clone();
+                        let source = repository.source.to_string();
+                        let comment_string = format!(
+                            "\n----\nComment: {}",
+                            issue
+                                .comments
+                                .iter()
+                                .map(|c| c.body.to_owned())
+                                .collect::<Vec<String>>()
+                                .join("\n----\nComment: ")
+                        );
+                        let issue_text =
+                            format!("# {}\n{}{}", issue.title, issue.body, comment_string);
+                        let raw_embedding = match embedding_api.generate_embedding(issue_text).await {
+                            Ok(embedding) => embedding,
+                            Err(err) => {
+                                error!(issue_number = issue.number, err = err.to_string(), "generate embedding error");
+                                continue;
+                            }
+                        };
+                        let embedding =
+                            Vector::from(raw_embedding);
+                        let issue_id: Option<i32> = match sqlx::query_scalar!(
+                            "select id from issues where source_id = $1",
+                            issue.id.to_string()
+                        )
+                        .fetch_optional(&pool)
+                        .await {
+                            Ok(id) => id,
+                            Err(err) => {
+                                error!(issue_number = issue.number, err = err.to_string(), "failed to fetch issue id");
+                                continue;
+                            }
+                        };
+                        let issue_id = if let Some(id) = issue_id {
+                            id
+                        } else {
+                            match sqlx::query_scalar(
                             r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding)
                                values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                                returning id"#
@@ -455,23 +487,31 @@ async fn handle_webhooks(
                             .bind(issue.url)
                             .bind(embedding)
                             .fetch_one(&pool)
-                            .await?
-                    };
-                    if !issue.comments.is_empty() {
-                        let mut qb = QueryBuilder::new(
-                            "insert into comments (source_id, body, url, issue_id)",
-                        );
-                        qb.push_values(issue.comments, |mut b, comment| {
-                            b.push_bind(comment.id)
-                                .push_bind(comment.body)
-                                .push_bind(comment.url)
-                                .push_bind(issue_id);
-                        });
-                        qb.push("on conflict do nothing");
-                        qb.build().execute(&pool).await?;
-                    }
-                    if let Some(page) = page {
-                        sqlx::query(
+                            .await {
+                                Ok(id) => id,
+                                Err(err) => {
+                                    error!(issue_number = issue.number, err = err.to_string(), "error inserting issue");
+                                    continue;
+                                }
+                            }
+                        };
+                        if !issue.comments.is_empty() {
+                            let mut qb = QueryBuilder::new(
+                                "insert into comments (source_id, body, url, issue_id)",
+                            );
+                            qb.push_values(issue.comments, |mut b, comment| {
+                                b.push_bind(comment.id)
+                                    .push_bind(comment.body)
+                                    .push_bind(comment.url)
+                                    .push_bind(issue_id);
+                            });
+                            qb.push("on conflict do nothing");
+                            if let Err(err) = qb.build().execute(&pool).await {
+                                error!(issue_number = issue.number, err = err.to_string(), "error inserting comments");
+                            }
+                        }
+                        if let Some(page) = page {
+                            if let Err(err) = sqlx::query(
                                 r#"insert into jobs (repository_id, data)
                                values ($1, jsonb_build_object('issues_page', $2))
                                on conflict (repository_id)
@@ -483,16 +523,22 @@ async fn handle_webhooks(
                             .bind(&repository.repo_id)
                             .bind(page)
                             .execute(&pool)
-                            .await?;
+                            .await {
+                                error!(issue_number = issue.number, err = err.to_string(), "error inserting job")
+                            }
+                        }
                     }
-                }
-                sqlx::query!(
-                    "delete from jobs where repository_id = $1",
-                    repository.repo_id
-                )
-                .execute(&pool)
-                .await?;
-                info!(parent: &span, "finished indexing {repository}");
+                    if let Err(err) = sqlx::query!(
+                        "delete from jobs where repository_id = $1",
+                        repository.repo_id
+                    )
+                    .execute(&pool)
+                    .await {
+                        error!(err = err.to_string(), "failed to delete job");
+                        return;
+                    }
+                    info!("finished indexing");
+                }.instrument(span));
                 None
             }
         };
