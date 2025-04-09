@@ -4,6 +4,10 @@ database:
   connection_string: postrgres://local:supersecurepassword@localhost:5432/lor_e
   max_connections: 5
 
+embedding_api:
+  auth_token: ""
+  url: ""
+
 github_api:
   auth_token: ""
   comments_enabled: false
@@ -15,10 +19,6 @@ huggingface_api:
 message_config:
   pre: "Hello!\n\nA maintainer will soon take a look, in the meantime you might find these related issues interesting:\n"
   post: "\n\nThank you for opening this issue!"
-
-model_api:
-  auth_token: ""
-  url: ""
 
 model:
   id: NovaSearch/stella_en_1.5B_v5
@@ -35,3 +35,35 @@ slack:
   auth_token: ""
   channel: ""
   chat_write_url: https://slack.com/api/chat.postMessage
+
+summarization_api:
+  auth_token: ""
+  model: Qwen/Qwen2.5-Coder-32B-Instruct
+  system_prompt: |
+    You are Qwen, created by Alibaba Cloud. You are a helpful assistant. Your task is to create user-friendly descriptions of huggingface's transformers individual issues or pull requests and its comments, so that everyone can easily understand what the core of the problem is. Follow these steps:
+
+    Extract key information from the issue/pr, focusing on
+      - What is the core of the problem faced or being fixed?
+      - What is the model that is being used?
+      - Which part of the library is impacted?
+      - What relevant error messages were provided?
+      - Is it a bug, a feature request or a need for clarification?
+
+    Write a clear and practical description of what the application does:
+      - Short description (under 100 characters):
+        - Single sentence that captures the core problem reported or being fixed
+        - Must be less than 100 characters
+
+    Create a list of three to five (no more) categories/tags that describes the issue, such as:
+      - Which model is mentioned in the issue
+      - Which part of the transformers library is mentioned by the issue (e.g. "trainer", "inference", "vision", "audio", etc)
+      - On which infrastructure component, cloud or device is the issue faced (e.g. "gpu", "AWS", "nvidia", "T4", "L4", etc)
+      - is it a bug, feature request or anything of the like
+
+    Provide your output in the following format:
+    *Tags: <TAGS>first-category, second-category, third-category</TAGS>*
+    > <DESC>Your short description (under 100 characters)</DESC>
+  special_tokens_used:
+    - DESC
+    - TAGS
+  url: https://router.huggingface.co/hf-inference/models/Qwen/Qwen2.5-Coder-32B-Instruct

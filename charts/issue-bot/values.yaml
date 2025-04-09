@@ -6,18 +6,20 @@ issueBot:
   imagePullPolicy: IfNotPresent
   databaseConnectionString: ""
   authToken: ""
+  embeddingApi:
+    url: ""
+    authToken: ""
   githubApi:
     authToken: ""
     commentsEnabled: true
   huggingfaceApi:
     authToken: ""
     commentsEnabled: true
-  modelApi:
-    url: ""
-    authToken: ""
   slack:
     authToken: ""
     channel: ""
+  summarizationApi:
+    authToken: ""
   pathPrefix: /
   ingress:
     annotations: {}

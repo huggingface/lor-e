@@ -46,6 +46,12 @@ spec:
         {{- end }}
         - name: ISSUE_BOT__AUTH_TOKEN
           value: "{{ .Values.issueBot.authToken }}"
+        - name: ISSUE_BOT__DATABASE__CONNECTION_STRING
+          value: "{{ .Values.issueBot.databaseConnectionString }}"
+        - name: ISSUE_BOT__EMBEDDING_API__AUTH_TOKEN
+          value: "{{ .Values.issueBot.embeddingApi.authToken }}"
+        - name: ISSUE_BOT__EMBEDDING_API__URL
+          value: "{{ .Values.issueBot.embeddingApi.url }}"
         - name: ISSUE_BOT__GITHUB_API__AUTH_TOKEN
           value: "{{ .Values.issueBot.githubApi.authToken }}"
         - name: ISSUE_BOT__GITHUB_API__COMMENTS_ENABLED
@@ -54,16 +60,12 @@ spec:
           value: "{{ .Values.issueBot.huggingfaceApi.authToken }}"
         - name: ISSUE_BOT__HUGGINGFACE_API__COMMENTS_ENABLED
           value: "{{ .Values.issueBot.huggingfaceApi.commentsEnabled }}"
-        - name: ISSUE_BOT__MODEL_API__AUTH_TOKEN
-          value: "{{ .Values.issueBot.modelApi.authToken }}"
-        - name: ISSUE_BOT__MODEL_API__URL
-          value: "{{ .Values.issueBot.modelApi.url }}"
         - name: ISSUE_BOT__SLACK__AUTH_TOKEN
           value: "{{ .Values.issueBot.slack.authToken }}"
         - name: ISSUE_BOT__SLACK__CHANNEL
           value: "{{ .Values.issueBot.slack.channel }}"
-        - name: ISSUE_BOT__DATABASE__CONNECTION_STRING
-          value: "{{ .Values.issueBot.databaseConnectionString }}"
+        - name: ISSUE_BOT__SUMMARIZATION_API__AUTH_TOKEN
+          value: "{{ .Values.issueBot.summarizationApi.authToken }}"
         ports:
           - name: ib-api
             containerPort: {{ .Values.issueBot.containerPort }}

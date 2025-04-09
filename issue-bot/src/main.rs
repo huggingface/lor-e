@@ -33,6 +33,7 @@ use sqlx::{
     types::Json,
     Pool, Postgres, QueryBuilder,
 };
+use summarization::SummarizationApi;
 use tokio::{
     net::TcpListener,
     select, signal,
@@ -53,6 +54,9 @@ mod metrics;
 mod middlewares;
 mod routes;
 mod slack;
+mod summarization;
+
+static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -265,10 +269,11 @@ async fn handle_webhooks_wrapper(
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
     slack: Slack,
+    summarization_api: SummarizationApi,
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     select! {
-        res = handle_webhooks(rx, embedding_api, github_api, huggingface_api, slack, pool) => { res },
+        res = handle_webhooks(rx, embedding_api, github_api, huggingface_api, slack, summarization_api, pool) => { res },
         _ = shutdown_signal() => { Ok(()) },
     }
 }
@@ -279,6 +284,7 @@ async fn handle_webhooks(
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
     slack: Slack,
+    summarization_api: SummarizationApi,
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     while let Some(webhook_data) = rx.recv().await {
@@ -288,8 +294,9 @@ async fn handle_webhooks(
                 match issue.action {
                     Action::Created => {
                         let issue_text = format!("# {}\n{}", issue.title, issue.body);
-                        let embedding =
-                            Vector::from(embedding_api.generate_embedding(issue_text).await?);
+                        let embedding = Vector::from(
+                            embedding_api.generate_embedding(issue_text.clone()).await?,
+                        );
 
                         let closest_issues: Vec<ClosestIssue> = sqlx::query_as(
                             "select title, number, html_url, 1 - (embedding <=> $1) as cosine_similarity from issues order by embedding <=> $1 LIMIT 3",
@@ -298,7 +305,11 @@ async fn handle_webhooks(
                             .fetch_all(&pool)
                             .await?;
 
-                        slack.closest_issues(&issue, &closest_issues).await?;
+                        let summarized_issue = summarization_api.summarize(issue_text).await?;
+
+                        slack
+                            .closest_issues(summarized_issue, &issue, &closest_issues)
+                            .await?;
 
                         match (issue.is_pull_request, &issue.source) {
                             (false, Source::Github) => {
@@ -628,10 +639,11 @@ async fn main() -> anyhow::Result<()> {
         .connect_with(opts)
         .await?;
 
-    let embedding_api = EmbeddingApi::new(config.model_api).await?;
+    let embedding_api = EmbeddingApi::new(config.embedding_api)?;
     let github_api = GithubApi::new(config.github_api, config.message_config.clone())?;
     let huggingface_api = HuggingfaceApi::new(config.huggingface_api, config.message_config)?;
     let slack = Slack::new(&config.slack)?;
+    let summarization_api = SummarizationApi::new(config.summarization_api)?;
 
     let (tx, rx) = mpsc::channel(4_096);
 
@@ -651,7 +663,15 @@ async fn main() -> anyhow::Result<()> {
             false,
             setup_metrics_recorder()
         ))),
-        handle_webhooks_wrapper(rx, embedding_api, github_api, huggingface_api, slack, pool)
+        handle_webhooks_wrapper(
+            rx,
+            embedding_api,
+            github_api,
+            huggingface_api,
+            slack,
+            summarization_api,
+            pool
+        )
     )?;
 
     Ok(())

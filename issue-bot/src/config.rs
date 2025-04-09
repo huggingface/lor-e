@@ -22,8 +22,17 @@ impl Default for ModelConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct ModelApiConfig {
+pub struct EmbeddingApiConfig {
     pub auth_token: String,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SummarizationApiConfig {
+    pub auth_token: String,
+    pub model: String,
+    pub special_tokens_used: Vec<String>,
+    pub system_prompt: String,
     pub url: String,
 }
 
@@ -84,12 +93,13 @@ pub struct SlackConfig {
 pub struct IssueBotConfig {
     pub auth_token: String,
     pub database: DatabaseConfig,
+    pub embedding_api: EmbeddingApiConfig,
     pub github_api: GithubApiConfig,
     pub huggingface_api: HuggingfaceApiConfig,
     pub message_config: MessageConfig,
-    pub model_api: ModelApiConfig,
     pub server: ServerConfig,
     pub slack: SlackConfig,
+    pub summarization_api: SummarizationApiConfig,
 }
 
 pub fn load_config<'de, T: Deserialize<'de>>(prefix: &str) -> Result<T, ConfigError> {

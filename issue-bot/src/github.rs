@@ -13,11 +13,9 @@ use tokio::time::sleep;
 use tracing::info;
 
 use crate::{
-    config::{GithubApiConfig, MessageConfig},
-    ClosestIssue, RepositoryData, deserialize_null_default
+    config::{GithubApiConfig, MessageConfig}, deserialize_null_default, ClosestIssue, RepositoryData, APP_USER_AGENT
 };
 
-static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 const X_RATELIMIT_REMAINING: HeaderName = HeaderName::from_static("x-ratelimit-remaining");
 const X_RATELIMIT_RESET: HeaderName = HeaderName::from_static("x-ratelimit-reset");
 

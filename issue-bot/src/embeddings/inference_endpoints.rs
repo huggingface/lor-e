@@ -4,7 +4,7 @@ use reqwest::{
 };
 use serde::Serialize;
 
-use crate::config::ModelApiConfig;
+use crate::{config::EmbeddingApiConfig, APP_USER_AGENT};
 
 use super::EmbeddingError;
 
@@ -24,17 +24,20 @@ struct EmbedRequest {
 
 #[derive(Clone)]
 pub struct EmbeddingApi {
-    cfg: ModelApiConfig,
+    cfg: EmbeddingApiConfig,
     client: Client,
 }
 
 impl EmbeddingApi {
-    pub async fn new(cfg: ModelApiConfig) -> Result<Self, EmbeddingError> {
+    pub fn new(cfg: EmbeddingApiConfig) -> Result<Self, EmbeddingError> {
         let mut headers = HeaderMap::new();
         let mut auth_value = HeaderValue::from_str(&format!("Bearer {}", cfg.auth_token))?;
         auth_value.set_sensitive(true);
         headers.insert(AUTHORIZATION, auth_value);
-        let client = Client::builder().default_headers(headers).build()?;
+        let client = Client::builder()
+            .user_agent(APP_USER_AGENT)
+            .default_headers(headers)
+            .build()?;
 
         Ok(Self { cfg, client })
     }

@@ -7,10 +7,8 @@ use thiserror::Error;
 
 use crate::{
     config::{HuggingfaceApiConfig, MessageConfig},
-    ClosestIssue,
+    ClosestIssue, APP_USER_AGENT,
 };
-
-static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 #[derive(Debug, Error)]
 pub enum HuggingfaceApiError {
