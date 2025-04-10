@@ -253,12 +253,12 @@ struct ClosestIssue {
     cosine_similarity: f64,
 }
 
-#[derive(Debug, Deserialize, FromRow)]
+#[derive(Debug, Deserialize)]
 struct JobData {
     issues_page: i32,
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug)]
 struct Job {
     data: Json<JobData>,
 }
@@ -372,18 +372,33 @@ async fn handle_webhooks(
                 info!("handling comment (state: {})", comment.action);
                 match comment.action {
                     Action::Created => {
-                        sqlx::query!(
-                            r#"insert into comments (source_id, body, url, issue_id)
-                               values ($1, $2, $3,
-                                      (select id from issues where source_id = $4))"#,
-                            comment.source_id,
-                            comment.body,
-                            comment.url,
-                            comment.issue_id,
+                        let issue_id = sqlx::query!(
+                            "select id from issues where source_id = $1",
+                            comment.source_id
                         )
-                        .execute(&pool)
+                        .fetch_optional(&pool)
                         .await?;
-                        Some(comment.issue_id)
+                        if let Some(issue_id) = issue_id {
+                            sqlx::query!(
+                                r#"insert into comments (source_id, body, url, issue_id)
+                               values ($1, $2, $3, $4)"#,
+                                comment.source_id,
+                                comment.body,
+                                comment.url,
+                                issue_id.id,
+                            )
+                            .execute(&pool)
+                            .await?;
+                            Some(comment.source_id)
+                        } else {
+                            error!(
+                                comment_id = comment.source_id,
+                                linked_issue_id = comment.issue_id,
+                                url = comment.url,
+                                "could not find issue associated with comment"
+                            );
+                            None
+                        }
                     }
                     Action::Edited => {
                         sqlx::query!(
