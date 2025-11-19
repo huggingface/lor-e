@@ -2,26 +2,6 @@ use config::{Config, ConfigError};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(unused)]
-pub struct ModelConfig {
-    pub id: String,
-    pub revision: String,
-    pub embeddings_size: usize,
-    pub max_input_size: usize,
-}
-
-impl Default for ModelConfig {
-    fn default() -> Self {
-        Self {
-            id: "NovaSearch/stella_en_1.5B_v5".to_string(),
-            revision: "main".to_string(),
-            embeddings_size: 384,
-            max_input_size: 512,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
 pub struct EmbeddingApiConfig {
     pub auth_token: String,
     pub url: String,

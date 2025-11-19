@@ -20,12 +20,6 @@ message_config:
   pre: "Hello!\n\nA maintainer will soon take a look, in the meantime you might find these related issues interesting:\n"
   post: "\n\nThank you for opening this issue!"
 
-model:
-  id: NovaSearch/stella_en_1.5B_v5
-  revision: main
-  embeddings_size: 1024
-  max_input_size: 131072
-
 server:
   ip: 0.0.0.0
   metrics_port: 4243
@@ -38,7 +32,7 @@ slack:
 
 summarization_api:
   auth_token: ""
-  model: Qwen/Qwen2.5-Coder-32B-Instruct
+  model: Qwen/Qwen3-Coder-480B-A35B-Instruct
   system_prompt: |
     You are Qwen, created by Alibaba Cloud. You are a helpful assistant. Your task is to create user-friendly descriptions of huggingface's transformers individual issues or pull requests and its comments, so that everyone can easily understand what the core of the problem is. Follow these steps:
 
@@ -66,4 +60,4 @@ summarization_api:
   special_tokens_used:
     - DESC
     - TAGS
-  url: https://router.huggingface.co/hf-inference/models/Qwen/Qwen2.5-Coder-32B-Instruct
+  url: https://router.huggingface.co/hf-inference/models/Qwen/Qwen3-Coder-480B-A35B-Instruct

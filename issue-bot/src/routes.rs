@@ -418,13 +418,21 @@ where
     }
 }
 
-// TODO: create job table and reply id?
+// TODO: reply id and endpoint to query progress?
 pub async fn index_repository(
     SecretValidator: SecretValidator,
     State(state): State<AppState>,
     Json(repository): Json<RepositoryData>,
 ) -> Result<(), ApiError> {
     state.tx.send(EventData::Indexation(repository)).await?;
+    Ok(())
+}
+
+pub async fn regenerate_embeddings(
+    SecretValidator: SecretValidator,
+    State(state): State<AppState>,
+) -> Result<(), ApiError> {
+    state.tx.send(EventData::RegenerateEmbeddings).await?;
     Ok(())
 }
 

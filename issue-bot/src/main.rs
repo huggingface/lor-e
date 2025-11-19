@@ -24,8 +24,8 @@ use metrics::start_metrics_server;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use middlewares::RequestSpan;
 use pgvector::Vector;
-use routes::{health, index_repository};
-use serde::{Deserialize, Deserializer};
+use routes::{health, index_repository, regenerate_embeddings};
+use serde::{Deserialize, Deserializer, Serialize};
 use slack::Slack;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -130,6 +130,7 @@ fn app(state: AppState) -> Router {
     Router::new()
         .nest("/event", routes::event_router())
         .route("/index", post(index_repository))
+        .route("/regenerate-embeddings", post(regenerate_embeddings))
         .route_layer(middleware::from_fn(middlewares::track_metrics))
         .layer(
             ServiceBuilder::new()
@@ -209,6 +210,7 @@ enum EventData {
     Issue(IssueData),
     Comment(CommentData),
     Indexation(RepositoryData),
+    RegenerateEmbeddings,
 }
 
 enum Action {
@@ -253,9 +255,17 @@ struct ClosestIssue {
     cosine_similarity: f64,
 }
 
-#[derive(Debug, Deserialize)]
-struct JobData {
-    issues_page: i32,
+#[derive(Debug, Deserialize, Serialize)]
+enum JobData {
+    IssueIndexation { issues_page: i32 },
+    EmbeddingsRegeneration { current_issue: i32 },
+}
+
+#[derive(Debug, sqlx::Type)]
+#[sqlx(type_name = "job_type", rename_all = "snake_case")]
+enum JobType {
+    IssueIndexation,
+    EmbeddingsRegeneration,
 }
 
 #[derive(Debug)]
@@ -437,8 +447,9 @@ async fn handle_webhooks(
                     info!("indexing started");
                     let job = match sqlx::query_as!(
                         Job,
-                        r#"select data as "data: Json<JobData>" from jobs where repository_id = $1"#,
-                        repository.repo_id
+                        r#"select data as "data: Json<JobData>" from jobs where repository_id = $1 and job_type = $2"#,
+                        repository.repo_id,
+                        JobType::IssueIndexation as _,
                     )
                     .fetch_optional(&pool)
                     .await {
@@ -449,7 +460,7 @@ async fn handle_webhooks(
                         }
                     };
                     let from_issues_page =
-                        job.as_ref().map(|j| j.data.issues_page + 1).unwrap_or(1);
+                        job.as_ref().and_then(|j| match j.data.0 { JobData::IssueIndexation { issues_page } => Some(issues_page + 1), _ => None}).unwrap_or(1);
                     let issues = github_api.get_issues(from_issues_page, repository.clone());
                     pin_mut!(issues);
                     while let Some(issue) = issues.next().await {
@@ -538,16 +549,19 @@ async fn handle_webhooks(
                         }
                         if let Some(page) = page {
                             if let Err(err) = sqlx::query(
-                                r#"insert into jobs (repository_id, data)
-                               values ($1, jsonb_build_object('issues_page', $2))
+                                r#"insert into jobs (data, job_type, repository_id)
+                               values ($1, $2, $3)
                                on conflict (repository_id)
                                do update
                                set
-                                   data = jsonb_set(jobs.data, '{issues_page}', to_jsonb($2::int), true),
+                                   data = EXCLUDED.data,
                                    updated_at = current_timestamp"#,
                             )
+                            .bind(Json(JobData::IssueIndexation {
+                                issues_page: page,
+                            }))
+                            .bind(JobType::IssueIndexation)
                             .bind(&repository.repo_id)
-                            .bind(page)
                             .execute(&pool)
                             .await {
                                 error!(issue_number = issue.number, err = err.to_string(), "error inserting job")
@@ -567,48 +581,168 @@ async fn handle_webhooks(
                 }.instrument(span));
                 None
             }
+            EventData::RegenerateEmbeddings => {
+                let embedding_api = embedding_api.clone();
+                let pool = pool.clone();
+                let span = info_span!("embeddings_regeneration",);
+                tokio::spawn(
+                    async move {
+                        info!("embeddings regenaration started");
+                        let job = match sqlx::query_as!(
+                            Job,
+                            r#"select data as "data: Json<JobData>" from jobs where job_type = $1"#,
+                            JobType::EmbeddingsRegeneration as _,
+                        )
+                        .fetch_optional(&pool)
+                        .await
+                        {
+                            Ok(job) => job,
+                            Err(err) => {
+                                error!(err = err.to_string(), "error fetching job");
+                                return;
+                            }
+                        };
+                        let current_issue = job
+                            .as_ref()
+                            .and_then(|j| match j.data.0 {
+                                JobData::EmbeddingsRegeneration { current_issue } => {
+                                    Some(current_issue)
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let issues = match sqlx::query!(
+                            r#"
+                                SELECT id, source_id
+                                FROM issues
+                                WHERE id > $1
+                                ORDER BY id
+                            "#,
+                            current_issue
+                        )
+                        .fetch_all(&pool)
+                        .await
+                        {
+                            Ok(ids) => ids,
+                            Err(err) => {
+                                error!(
+                                    err = err.to_string(),
+                                    "error fetching issue ids for embeddings regeneration"
+                                );
+                                return;
+                            }
+                        };
+                        let total_issues = issues.len();
+                        info!("regenerating embeddings for {} issues", total_issues);
+                        for (current_issue_nb, issue) in issues.into_iter().enumerate() {
+                            if let Err(err) =
+                                update_issue_embeddings(&embedding_api, &pool, &issue.source_id)
+                                    .await
+                            {
+                                error!(
+                                    issue_id = issue.source_id,
+                                    err = err.to_string(),
+                                    "error regenerating issue embedding"
+                                );
+                            }
+                            if let Err(err) = sqlx::query(
+                                r#"insert into jobs (data, job_type)
+                               values ($1, $2)
+                               on conflict (job_type)
+                                   where job_type = $2
+                               do update
+                               set
+                                   data = EXCLUDED.data,
+                                   updated_at = current_timestamp"#,
+                            )
+                            .bind(Json(JobData::EmbeddingsRegeneration {
+                                current_issue: issue.id,
+                            }))
+                            .bind(JobType::EmbeddingsRegeneration)
+                            .execute(&pool)
+                            .await
+                            {
+                                error!(
+                                    issue_id = issue.source_id,
+                                    err = err.to_string(),
+                                    "error inserting job"
+                                )
+                            }
+                            if total_issues > 10 && current_issue_nb % (total_issues / 10) == 0 {
+                                info!(
+                                    issue_id = issue.source_id,
+                                    "regenerating embeddings, {}% completed",
+                                    current_issue_nb / total_issues * 100
+                                );
+                            }
+                        }
+                        if let Err(err) = sqlx::query!(
+                            "delete from jobs where job_type = $1",
+                            JobType::EmbeddingsRegeneration as _,
+                        )
+                        .execute(&pool)
+                        .await
+                        {
+                            error!(err = err.to_string(), "failed to delete job");
+                            return;
+                        }
+                        info!("finished embeddings regeneration");
+                    }
+                    .instrument(span),
+                );
+                None
+            }
         };
 
         if let Some(issue_id) = issue_id {
-            let issue = sqlx::query!(
-                r#"
-                SELECT
-                  i.title,
-                  i.body,
-                  (
-                    SELECT JSON_AGG(c.body)
-                    FROM comments AS c
-                    WHERE c.issue_id = i.id
-                  ) AS comments
-                FROM
-                  issues AS i
-                WHERE
-                  i.source_id = $1;
-            "#,
-                issue_id,
-            )
-            .fetch_one(&pool)
-            .await?;
-            let comment_string = match issue.comments {
-                Some(comments) => {
-                    let comments: Vec<String> = serde_json::from_value(comments)?;
-                    format!("\n----\nComment: {}", comments.join("\n----\nComment: "))
-                }
-                None => String::new(),
-            };
-            let issue_text = format!("# {}\n{}{}", issue.title, issue.body, comment_string);
-            let embedding = Vector::from(embedding_api.generate_embedding(issue_text).await?);
-            sqlx::query(
-                r#"update issues
-               set embedding = $1, updated_at = current_timestamp
-               where source_id = $2"#,
-            )
-            .bind(embedding)
-            .bind(issue_id)
-            .execute(&pool)
-            .await?;
+            update_issue_embeddings(&embedding_api, &pool, &issue_id).await?;
         }
     }
+    Ok(())
+}
+
+async fn update_issue_embeddings(
+    embedding_api: &EmbeddingApi,
+    pool: &Pool<Postgres>,
+    issue_id: &str,
+) -> anyhow::Result<()> {
+    let issue = sqlx::query!(
+        r#"
+            SELECT
+              i.title,
+              i.body,
+              (
+                SELECT JSON_AGG(c.body)
+                FROM comments AS c
+                WHERE c.issue_id = i.id
+              ) AS comments
+            FROM
+              issues AS i
+            WHERE
+              i.source_id = $1;
+        "#,
+        issue_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    let comment_string = match issue.comments {
+        Some(comments) => {
+            let comments: Vec<String> = serde_json::from_value(comments)?;
+            format!("\n----\nComment: {}", comments.join("\n----\nComment: "))
+        }
+        None => String::new(),
+    };
+    let issue_text = format!("# {}\n{}{}", issue.title, issue.body, comment_string);
+    let embedding = Vector::from(embedding_api.generate_embedding(issue_text).await?);
+    sqlx::query(
+        r#"update issues
+           set embedding = $1, updated_at = current_timestamp
+           where source_id = $2"#,
+    )
+    .bind(embedding)
+    .bind(issue_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

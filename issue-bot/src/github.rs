@@ -13,7 +13,8 @@ use tokio::time::sleep;
 use tracing::info;
 
 use crate::{
-    config::{GithubApiConfig, MessageConfig}, deserialize_null_default, ClosestIssue, RepositoryData, APP_USER_AGENT
+    config::{GithubApiConfig, MessageConfig},
+    deserialize_null_default, ClosestIssue, RepositoryData, APP_USER_AGENT,
 };
 
 const X_RATELIMIT_REMAINING: HeaderName = HeaderName::from_static("x-ratelimit-remaining");
@@ -181,7 +182,8 @@ impl GithubApi {
         &self,
         from_page: i32,
         repository: RepositoryData,
-    ) -> impl Stream<Item = Result<(IssueWithComments, Option<i32>), GithubApiError>> + use<'_> {
+    ) -> impl Stream<Item = Result<(IssueWithComments, Option<i32>), GithubApiError>> + use<'_>
+    {
         try_stream! {
             let url = format!("https://api.github.com/repos/{}/issues", repository.repo_id);
             let client = self.client.clone();
@@ -200,11 +202,9 @@ impl GithubApi {
                 let link_header = res.headers().get(LINK).cloned();
                 let ratelimit_remaining = res.headers().get(X_RATELIMIT_REMAINING).cloned();
                 let ratelimit_reset = res.headers().get(X_RATELIMIT_RESET).cloned();
-                handle_ratelimit(ratelimit_remaining, ratelimit_reset).await?;
                 let issues = res.json::<Vec<Issue>>().await?;
-                if get_next_page(link_header)?.is_none() {
-                    break;
-                }
+                info!("fetched {} issues from page {}, getting comments for each issue next", issues.len(), page);
+                handle_ratelimit(ratelimit_remaining, ratelimit_reset).await?;
                 let page_issue_count = issues.len();
                 for (i, issue) in issues.into_iter().enumerate() {
                     let res = client
@@ -220,13 +220,19 @@ impl GithubApi {
                         .await?;
                     yield (IssueWithComments::new(issue, comments), (i + 1 == page_issue_count).then_some(page));
                 }
+                if get_next_page(link_header)?.is_none() {
+                    break;
+                }
                 page += 1;
             }
         }
     }
 }
 
-async fn handle_ratelimit(remaining: Option<HeaderValue>, reset: Option<HeaderValue>) -> Result<(), GithubApiError> {
+async fn handle_ratelimit(
+    remaining: Option<HeaderValue>,
+    reset: Option<HeaderValue>,
+) -> Result<(), GithubApiError> {
     match (remaining, reset) {
         (Some(remaining), Some(reset)) => {
             let remaining: i32 = remaining.to_str()?.parse()?;
@@ -237,7 +243,9 @@ async fn handle_ratelimit(remaining: Option<HeaderValue>, reset: Option<HeaderVa
                 sleep(duration).await;
             }
         }
-        (remaining, reset) => return Err(GithubApiError::MissingRateLimitHeaders(remaining, reset)),
+        (remaining, reset) => {
+            return Err(GithubApiError::MissingRateLimitHeaders(remaining, reset))
+        }
     }
     Ok(())
 }
