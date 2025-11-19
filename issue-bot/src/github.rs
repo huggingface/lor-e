@@ -181,11 +181,11 @@ impl GithubApi {
     pub(crate) fn get_issues(
         &self,
         from_page: i32,
-        repository: RepositoryData,
+        repo_data: RepositoryData,
     ) -> impl Stream<Item = Result<(IssueWithComments, Option<i32>), GithubApiError>> + use<'_>
     {
         try_stream! {
-            let url = format!("https://api.github.com/repos/{}/issues", repository.repo_id);
+            let url = format!("https://api.github.com/repos/{}/issues", repo_data.full_name);
             let client = self.client.clone();
             let mut page = from_page;
             loop {

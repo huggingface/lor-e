@@ -19,6 +19,8 @@ pub enum ApiError {
     Embedding(#[from] crate::embeddings::EmbeddingError),
     #[error("hmac key invalid length")]
     Hmac(#[from] hmac::digest::InvalidLength),
+    #[error("indexation in progress")]
+    IndexationInProgress,
     #[error("malformed webhook: {0}")]
     MalformedWebhook(String),
     #[error("send error: {0}")]
@@ -61,6 +63,10 @@ impl IntoResponse for ApiError {
                     "Internal server error".to_string(),
                 )
             }
+            ApiError::IndexationInProgress => (
+                StatusCode::CONFLICT,
+                "An indexation is already in progress".to_string(),
+            ),
             ApiError::MalformedWebhook(err) => {
                 error!("{}", err);
                 (StatusCode::BAD_REQUEST, "Bad request".to_string())

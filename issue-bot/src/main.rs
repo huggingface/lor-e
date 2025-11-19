@@ -1,9 +1,10 @@
 use std::{
+    collections::HashMap,
     env,
     fmt::Display,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Once,
+        Arc, Once,
     },
     time::Duration,
 };
@@ -37,7 +38,10 @@ use summarization::SummarizationApi;
 use tokio::{
     net::TcpListener,
     select, signal,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        RwLock,
+    },
     task::JoinHandle,
 };
 use tower::{BoxError, ServiceBuilder};
@@ -61,6 +65,7 @@ static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_P
 #[derive(Clone)]
 pub struct AppState {
     auth_token: String,
+    ongoing_indexation: Arc<RwLock<HashMap<String, ()>>>,
     tx: Sender<EventData>,
 }
 
@@ -183,6 +188,7 @@ struct IssueData {
     number: i32,
     html_url: String,
     url: String,
+    repository_full_name: String,
     source: Source,
 }
 
@@ -196,13 +202,13 @@ struct CommentData {
 
 #[derive(Clone, Deserialize)]
 pub struct RepositoryData {
-    repo_id: String,
+    full_name: String,
     source: Source,
 }
 
 impl Display for RepositoryData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} repo '{}'", self.source, self.repo_id)
+        write!(f, "{} repo '{}'", self.source, self.full_name)
     }
 }
 
@@ -273,26 +279,30 @@ struct Job {
     data: Json<JobData>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_webhooks_wrapper(
     rx: Receiver<EventData>,
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
+    ongoing_indexation: Arc<RwLock<HashMap<String, ()>>>,
     slack: Slack,
     summarization_api: SummarizationApi,
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     select! {
-        res = handle_webhooks(rx, embedding_api, github_api, huggingface_api, slack, summarization_api, pool) => { res },
+        res = handle_webhooks(rx, embedding_api, github_api, huggingface_api, ongoing_indexation, slack, summarization_api, pool) => { res },
         _ = shutdown_signal() => { Ok(()) },
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_webhooks(
     mut rx: Receiver<EventData>,
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
+    ongoing_indexation: Arc<RwLock<HashMap<String, ()>>>,
     slack: Slack,
     summarization_api: SummarizationApi,
     pool: Pool<Postgres>,
@@ -336,8 +346,8 @@ async fn handle_webhooks(
                         }
 
                         sqlx::query(
-                        r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding)
-                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+                        r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, repository_full_name, embedding)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
                         )
                         .bind(issue.source_id)
                         .bind(issue.source.to_string())
@@ -347,6 +357,7 @@ async fn handle_webhooks(
                         .bind(issue.number)
                         .bind(issue.html_url)
                         .bind(issue.url)
+                        .bind(issue.repository_full_name)
                         .bind(embedding)
                         .execute(&pool)
                         .await?;
@@ -434,21 +445,27 @@ async fn handle_webhooks(
                     }
                 }
             }
-            EventData::Indexation(repository) => {
+            EventData::Indexation(repo_data) => {
                 let embedding_api = embedding_api.clone();
                 let github_api = github_api.clone();
                 let pool = pool.clone();
+                let ongoing_indexation = ongoing_indexation.clone();
                 let span = info_span!(
                     "indexation",
-                    repository_id = repository.repo_id,
-                    source = repository.source.to_string()
+                    repository = repo_data.full_name,
+                    source = repo_data.source.to_string()
                 );
                 tokio::spawn(async move {
                     info!("indexing started");
+                    ongoing_indexation
+                        .write()
+                        .await
+                        .entry(repo_data.full_name.clone())
+                        .or_insert(());
                     let job = match sqlx::query_as!(
                         Job,
-                        r#"select data as "data: Json<JobData>" from jobs where repository_id = $1 and job_type = $2"#,
-                        repository.repo_id,
+                        r#"select data as "data: Json<JobData>" from jobs where repository_full_name = $1 and job_type = $2"#,
+                        repo_data.full_name,
                         JobType::IssueIndexation as _,
                     )
                     .fetch_optional(&pool)
@@ -461,7 +478,7 @@ async fn handle_webhooks(
                     };
                     let from_issues_page =
                         job.as_ref().and_then(|j| match j.data.0 { JobData::IssueIndexation { issues_page } => Some(issues_page + 1), _ => None}).unwrap_or(1);
-                    let issues = github_api.get_issues(from_issues_page, repository.clone());
+                    let issues = github_api.get_issues(from_issues_page, repo_data.clone());
                     pin_mut!(issues);
                     while let Some(issue) = issues.next().await {
                         let (issue, page) = match issue {
@@ -473,7 +490,7 @@ async fn handle_webhooks(
                         };
                         let embedding_api = embedding_api.clone();
                         let pool = pool.clone();
-                        let source = repository.source.to_string();
+                        let source = repo_data.source.to_string();
                         let comment_string = format!(
                             "\n----\nComment: {}",
                             issue
@@ -510,8 +527,8 @@ async fn handle_webhooks(
                             id
                         } else {
                             match sqlx::query_scalar(
-                            r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, embedding)
-                               values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                            r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, repository_full_name, embedding)
+                               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                                returning id"#
                             )
                             .bind(issue.id.to_string())
@@ -522,6 +539,7 @@ async fn handle_webhooks(
                             .bind(issue.number)
                             .bind(issue.html_url)
                             .bind(issue.url)
+                            .bind(&repo_data.full_name)
                             .bind(embedding)
                             .fetch_one(&pool)
                             .await {
@@ -549,9 +567,9 @@ async fn handle_webhooks(
                         }
                         if let Some(page) = page {
                             if let Err(err) = sqlx::query(
-                                r#"insert into jobs (data, job_type, repository_id)
+                                r#"insert into jobs (data, job_type, repository_full_name)
                                values ($1, $2, $3)
-                               on conflict (repository_id)
+                               on conflict (repository_full_name)
                                do update
                                set
                                    data = EXCLUDED.data,
@@ -561,16 +579,20 @@ async fn handle_webhooks(
                                 issues_page: page,
                             }))
                             .bind(JobType::IssueIndexation)
-                            .bind(&repository.repo_id)
+                            .bind(&repo_data.full_name)
                             .execute(&pool)
                             .await {
                                 error!(issue_number = issue.number, err = err.to_string(), "error inserting job")
                             }
                         }
                     }
+                    ongoing_indexation
+                        .write()
+                        .await
+                        .remove(&repo_data.full_name);
                     if let Err(err) = sqlx::query!(
-                        "delete from jobs where repository_id = $1",
-                        repository.repo_id
+                        "delete from jobs where repository_full_name = $1",
+                        repo_data.full_name
                     )
                     .execute(&pool)
                     .await {
@@ -791,6 +813,7 @@ async fn main() -> anyhow::Result<()> {
     let embedding_api = EmbeddingApi::new(config.embedding_api)?;
     let github_api = GithubApi::new(config.github_api, config.message_config.clone())?;
     let huggingface_api = HuggingfaceApi::new(config.huggingface_api, config.message_config)?;
+    let ongoing_indexation = Arc::new(RwLock::new(HashMap::new()));
     let slack = Slack::new(&config.slack)?;
     let summarization_api = SummarizationApi::new(config.summarization_api)?;
 
@@ -798,6 +821,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         auth_token: config.auth_token,
+        ongoing_indexation: ongoing_indexation.clone(),
         tx,
     };
 
@@ -817,6 +841,7 @@ async fn main() -> anyhow::Result<()> {
             embedding_api,
             github_api,
             huggingface_api,
+            ongoing_indexation,
             slack,
             summarization_api,
             pool

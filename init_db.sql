@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS issues (
   number INT NOT NULL,
   html_url VARCHAR NOT NULL,
   url VARCHAR NOT NULL,
+  repository_full_name VARCHAR NOT NULL,
   embedding halfvec(2560) NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
   updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
@@ -33,12 +34,12 @@ CREATE INDEX IF NOT EXISTS issues_source_id_idx ON issues (source_id);
 CREATE INDEX IF NOT EXISTS comments_source_id_idx ON comments (source_id);
 CREATE INDEX IF NOT EXISTS issues_embedding_hnsw_idx ON issues USING hnsw (embedding halfvec_cosine_ops);
 
-CREATE TYPE IF NOT EXISTS job_type AS ENUM ('embeddings_regeneration', 'issue_indexation');
+CREATE TYPE job_type AS ENUM ('embeddings_regeneration', 'issue_indexation');
 
 CREATE TABLE IF NOT EXISTS jobs (
   id SERIAL PRIMARY KEY,
   job_type job_type NOT NULL,
-  repository_id VARCHAR UNIQUE,
+  repository_full_name VARCHAR UNIQUE,
   data JSONB NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
   updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')

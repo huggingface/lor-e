@@ -95,6 +95,7 @@ struct PullRequest {
 struct Issue {
     action: IssueActionType,
     issue: IssueData,
+    repository: Repository,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -116,6 +117,12 @@ struct IssueComment {
     action: CommentActionType,
     comment: Comment,
     issue: IssueData,
+    repository: Repository,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Repository {
+    full_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -154,9 +161,14 @@ pub async fn github_webhook(
     }
 
     let webhook = serde_json::from_slice::<GithubWebhook>(&body_bytes)?;
+    let ongoing_indexation = state.ongoing_indexation.read().await;
     let webhook_type = webhook.to_string();
     match webhook {
         GithubWebhook::Issue(issue) => {
+            let idx_process = ongoing_indexation.get(&issue.repository.full_name);
+            if idx_process.is_some() {
+                return Err(ApiError::IndexationInProgress);
+            }
             info!("received {} (state: {})", webhook_type, issue.action);
             match issue.action {
                 IssueActionType::Opened | IssueActionType::Edited | IssueActionType::Deleted => {
@@ -171,6 +183,7 @@ pub async fn github_webhook(
                             number: issue.issue.number,
                             html_url: issue.issue.html_url,
                             url: issue.issue.url,
+                            repository_full_name: issue.repository.full_name,
                             source: Source::Github,
                         }))
                         .await?
@@ -179,6 +192,10 @@ pub async fn github_webhook(
             }
         }
         GithubWebhook::IssueComment(comment) => {
+            let idx_process = ongoing_indexation.get(&comment.repository.full_name);
+            if idx_process.is_some() {
+                return Err(ApiError::IndexationInProgress);
+            }
             info!("received {} (state: {})", webhook_type, comment.action);
             state
                 .tx
@@ -355,6 +372,7 @@ pub async fn huggingface_webhook(
                     number: discussion.num,
                     html_url: discussion.url.web,
                     url: discussion.url.api,
+                    repository_full_name: String::new(), // TODO: extract repository full name from discussion url
                     source: Source::HuggingFace,
                 }))
                 .await?;
@@ -422,9 +440,14 @@ where
 pub async fn index_repository(
     SecretValidator: SecretValidator,
     State(state): State<AppState>,
-    Json(repository): Json<RepositoryData>,
+    Json(repo_data): Json<RepositoryData>,
 ) -> Result<(), ApiError> {
-    state.tx.send(EventData::Indexation(repository)).await?;
+    let ongoing_indexation = state.ongoing_indexation.write().await;
+    let idx_process = ongoing_indexation.get(&repo_data.full_name);
+    if idx_process.is_some() {
+        return Err(ApiError::IndexationInProgress);
+    }
+    state.tx.send(EventData::Indexation(repo_data)).await?;
     Ok(())
 }
 
@@ -446,13 +469,13 @@ pub async fn health() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::BorrowMut;
+    use std::{borrow::BorrowMut, collections::HashMap, sync::Arc};
 
     use axum::{
         body::Body,
         http::{header::CONTENT_TYPE, Request, StatusCode},
     };
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, RwLock};
     use tower::ServiceExt;
 
     use crate::{
@@ -467,6 +490,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let state = AppState {
             auth_token: config.auth_token.clone(),
+            ongoing_indexation: Arc::new(RwLock::new(HashMap::new())),
             tx,
         };
         let mut app = app(state);
@@ -514,6 +538,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let state = AppState {
             auth_token: auth_token.clone(),
+            ongoing_indexation: Arc::new(RwLock::new(HashMap::new())),
             tx,
         };
         let mut app = app(state);
