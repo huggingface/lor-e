@@ -33,7 +33,7 @@ CREATE INDEX IF NOT EXISTS issues_source_id_idx ON issues (source_id);
 CREATE INDEX IF NOT EXISTS comments_source_id_idx ON comments (source_id);
 CREATE INDEX IF NOT EXISTS issues_embedding_hnsw_idx ON issues USING hnsw (embedding halfvec_cosine_ops);
 
-CREATE TYPE job_type AS ENUM ('embeddings_regeneration', 'issue_indexation');
+CREATE TYPE IF NOT EXISTS job_type AS ENUM ('embeddings_regeneration', 'issue_indexation');
 
 CREATE TABLE IF NOT EXISTS jobs (
   id SERIAL PRIMARY KEY,
@@ -45,5 +45,4 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 CREATE INDEX IF NOT EXISTS jobs_repository_id_idx ON jobs (repository_id);
-CREATE INDEX IF NOT EXISTS jobs_job_type_idx ON jobs (job_type);
-CREATE UNIQUE INDEX jobs_type_special_idx ON jobs (job_type) WHERE job_type = 'embeddings_regeneration';
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_type_embeddings_regeneration_idx ON jobs (job_type) WHERE job_type = 'embeddings_regeneration';
