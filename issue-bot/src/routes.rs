@@ -495,8 +495,8 @@ mod tests {
         };
         let mut app = app(state);
 
-        let payload_body = r#"{"action":"opened","issue":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}"#;
-        let sig = "sha256=930e7b9a7cca3f85bc49a693f1d9105ca32bb15f13cda8871aaf79bba27c48cc";
+        let payload_body = r#"{"action":"opened","issue":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}, "repository":{"full_name":"huggingface/lor-e"}}"#;
+        let sig = "sha256=8e288dccf7b2744c5f3f30ab1e82672f16c0cb0f809d384df85cac2421e153af";
 
         let response = app
             .borrow_mut()
@@ -513,8 +513,8 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let payload_body = r#"{"action":"created","comment":{"body":"test review","id":1234,"url":"https://github.com/huggingface/lor-e/5#comment-123"}, "issue":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}}"#;
-        let sig = "sha256=cb81358e382b98e54789541ec9deeef909d89437311b9c626b13b40662f5ef52";
+        let payload_body = r#"{"action":"created","comment":{"body":"test review","id":1234,"url":"https://github.com/huggingface/lor-e/5#comment-123"},"issue":{"title":"my great contribution to the world","body":"superb work, isnt it","id":4321,"number":5,"html_url":"https://github.com/huggingface/lor-e/5", "url":"https://github.com/api/huggingface/lor-e/5"}, "repository":{"full_name":"huggingface/lor-e"}}"#;
+        let sig = "sha256=017815fdb6eda66aa8f62123844001fa64e1b2c137808a0ac68f60091ca36f56";
 
         let response = app
             .oneshot(
