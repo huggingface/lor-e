@@ -1,7 +1,7 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.85-bookworm AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.91-bookworm AS chef
 WORKDIR /usr/src
 
-ENV SCCACHE=0.10.0
+ENV SCCACHE=0.12.0
 ENV RUSTC_WRAPPER=/usr/local/bin/sccache
 ENV SCCACHE_DIR=/sccache
 
