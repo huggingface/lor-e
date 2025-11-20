@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     env,
     fmt::Display,
     sync::{
@@ -65,7 +65,7 @@ static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_P
 #[derive(Clone)]
 pub struct AppState {
     auth_token: String,
-    ongoing_indexation: Arc<RwLock<HashMap<String, ()>>>,
+    ongoing_indexation: Arc<RwLock<HashSet<String>>>,
     tx: Sender<EventData>,
 }
 
@@ -285,7 +285,7 @@ async fn handle_webhooks_wrapper(
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
-    ongoing_indexation: Arc<RwLock<HashMap<String, ()>>>,
+    ongoing_indexation: Arc<RwLock<HashSet<String>>>,
     slack: Slack,
     summarization_api: SummarizationApi,
     pool: Pool<Postgres>,
@@ -302,7 +302,7 @@ async fn handle_webhooks(
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
-    ongoing_indexation: Arc<RwLock<HashMap<String, ()>>>,
+    ongoing_indexation: Arc<RwLock<HashSet<String>>>,
     slack: Slack,
     summarization_api: SummarizationApi,
     pool: Pool<Postgres>,
@@ -457,11 +457,14 @@ async fn handle_webhooks(
                 );
                 tokio::spawn(async move {
                     info!("indexing started");
-                    ongoing_indexation
+                    let ongoing = ongoing_indexation
                         .write()
                         .await
-                        .entry(repo_data.full_name.clone())
-                        .or_insert(());
+                        .insert(repo_data.full_name.clone());
+                    if ongoing {
+                        error!("indexation already ongoing");
+                        return;
+                    }
                     let job = match sqlx::query_as!(
                         Job,
                         r#"select data as "data: Json<JobData>" from jobs where repository_full_name = $1 and job_type = $2"#,
@@ -813,7 +816,7 @@ async fn main() -> anyhow::Result<()> {
     let embedding_api = EmbeddingApi::new(config.embedding_api)?;
     let github_api = GithubApi::new(config.github_api, config.message_config.clone())?;
     let huggingface_api = HuggingfaceApi::new(config.huggingface_api, config.message_config)?;
-    let ongoing_indexation = Arc::new(RwLock::new(HashMap::new()));
+    let ongoing_indexation = Arc::new(RwLock::new(HashSet::new()));
     let slack = Slack::new(&config.slack)?;
     let summarization_api = SummarizationApi::new(config.summarization_api)?;
 

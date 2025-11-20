@@ -45,5 +45,5 @@ CREATE TABLE jobs (
   updated_at timestamp with time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
 
-CREATE INDEX jobs_repository_id_idx ON jobs (repository_id);
+CREATE INDEX jobs_repository_full_name_idx ON jobs (repository_full_name);
 CREATE UNIQUE INDEX jobs_type_embeddings_regeneration_idx ON jobs (job_type) WHERE job_type = 'embeddings_regeneration';

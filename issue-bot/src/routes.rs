@@ -165,8 +165,7 @@ pub async fn github_webhook(
     let webhook_type = webhook.to_string();
     match webhook {
         GithubWebhook::Issue(issue) => {
-            let idx_process = ongoing_indexation.get(&issue.repository.full_name);
-            if idx_process.is_some() {
+            if ongoing_indexation.contains(&issue.repository.full_name) {
                 return Err(ApiError::IndexationInProgress);
             }
             info!("received {} (state: {})", webhook_type, issue.action);
@@ -192,8 +191,7 @@ pub async fn github_webhook(
             }
         }
         GithubWebhook::IssueComment(comment) => {
-            let idx_process = ongoing_indexation.get(&comment.repository.full_name);
-            if idx_process.is_some() {
+            if ongoing_indexation.contains(&comment.repository.full_name) {
                 return Err(ApiError::IndexationInProgress);
             }
             info!("received {} (state: {})", webhook_type, comment.action);
@@ -442,9 +440,12 @@ pub async fn index_repository(
     State(state): State<AppState>,
     Json(repo_data): Json<RepositoryData>,
 ) -> Result<(), ApiError> {
-    let ongoing_indexation = state.ongoing_indexation.write().await;
-    let idx_process = ongoing_indexation.get(&repo_data.full_name);
-    if idx_process.is_some() {
+    if state
+        .ongoing_indexation
+        .read()
+        .await
+        .contains(&repo_data.full_name)
+    {
         return Err(ApiError::IndexationInProgress);
     }
     state.tx.send(EventData::Indexation(repo_data)).await?;
@@ -469,7 +470,7 @@ pub async fn health() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::BorrowMut, collections::HashMap, sync::Arc};
+    use std::{borrow::BorrowMut, collections::HashSet, sync::Arc};
 
     use axum::{
         body::Body,
@@ -490,7 +491,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let state = AppState {
             auth_token: config.auth_token.clone(),
-            ongoing_indexation: Arc::new(RwLock::new(HashMap::new())),
+            ongoing_indexation: Arc::new(RwLock::new(HashSet::new())),
             tx,
         };
         let mut app = app(state);
@@ -538,7 +539,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let state = AppState {
             auth_token: auth_token.clone(),
-            ongoing_indexation: Arc::new(RwLock::new(HashMap::new())),
+            ongoing_indexation: Arc::new(RwLock::new(HashSet::new())),
             tx,
         };
         let mut app = app(state);
