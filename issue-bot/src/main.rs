@@ -457,11 +457,11 @@ async fn handle_webhooks(
                 );
                 tokio::spawn(async move {
                     info!("indexing started");
-                    let ongoing = ongoing_indexation
+                    let contained_in_set = ongoing_indexation
                         .write()
                         .await
                         .insert(repo_data.full_name.clone());
-                    if ongoing {
+                    if !contained_in_set {
                         error!("indexation already ongoing");
                         return;
                     }
