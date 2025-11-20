@@ -50,9 +50,6 @@ impl EmbeddingApi {
         let max_retries = 5;
         let mut retries = 0;
         loop {
-            if retries > max_retries {
-                return Err(EmbeddingError::MaxRetriesExceeded(max_retries));
-            }
             let res = self
                 .client
                 .post(&self.cfg.url)
@@ -68,6 +65,9 @@ impl EmbeddingApi {
                     if e.is_timeout() {
                         warn!("Embedding API request timed out");
                         retries += 1;
+                        if retries > max_retries {
+                            return Err(EmbeddingError::MaxRetriesExceeded(max_retries));
+                        }
                         tokio::time::sleep(Duration::from_secs(2_u64.pow(retries))).await;
                         continue;
                     }
@@ -83,6 +83,9 @@ impl EmbeddingApi {
                     status, response_content
                 );
                 retries += 1;
+                if retries > max_retries {
+                    return Err(EmbeddingError::MaxRetriesExceeded(max_retries));
+                }
                 tokio::time::sleep(Duration::from_secs(2_u64.pow(retries))).await;
                 continue;
             }
