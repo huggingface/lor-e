@@ -67,7 +67,6 @@ static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_P
 #[derive(Clone)]
 pub struct AppState {
     auth_token: String,
-    ongoing_indexation: Arc<RwLock<HashSet<String>>>,
     tx: Sender<EventData>,
 }
 
@@ -949,7 +948,6 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         auth_token: config.auth_token,
-        ongoing_indexation: ongoing_indexation.clone(),
         tx,
     };
 

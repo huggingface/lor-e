@@ -5,7 +5,7 @@ use chrono::Utc;
 use futures::Stream;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, LINK},
-    Client, StatusCode,
+    Client,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -38,8 +38,6 @@ pub enum GithubApiError {
     TaskJoin(#[from] tokio::task::JoinError),
     #[error("to str error: {0}")]
     ToStr(#[from] axum::http::header::ToStrError),
-    #[error("unsuccesful response: {0}")]
-    UnsuccesfulResponse(StatusCode),
 }
 
 #[derive(Debug, Deserialize)]
