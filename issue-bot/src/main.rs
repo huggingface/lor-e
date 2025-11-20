@@ -49,6 +49,8 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, info, info_span, Instrument, Span};
 use tracing_subscriber::EnvFilter;
 
+use crate::routes::index_issue;
+
 mod config;
 mod embeddings;
 mod errors;
@@ -135,6 +137,7 @@ fn app(state: AppState) -> Router {
     Router::new()
         .nest("/event", routes::event_router())
         .route("/index", post(index_repository))
+        .route("/index-issue", post(index_issue))
         .route("/regenerate-embeddings", post(regenerate_embeddings))
         .route_layer(middleware::from_fn(middlewares::track_metrics))
         .layer(
@@ -201,6 +204,12 @@ struct CommentData {
 }
 
 #[derive(Clone, Deserialize)]
+struct IndexIssueData {
+    issue_number: i32,
+    repository_full_name: String,
+}
+
+#[derive(Clone, Deserialize)]
 pub struct RepositoryData {
     full_name: String,
     source: Source,
@@ -215,7 +224,8 @@ impl Display for RepositoryData {
 enum EventData {
     Issue(IssueData),
     Comment(CommentData),
-    Indexation(RepositoryData),
+    IssueIndexation(IndexIssueData),
+    RepositoryIndexation(RepositoryData),
     RegenerateEmbeddings,
 }
 
@@ -445,13 +455,13 @@ async fn handle_webhooks(
                     }
                 }
             }
-            EventData::Indexation(repo_data) => {
+            EventData::RepositoryIndexation(repo_data) => {
                 let embedding_api = embedding_api.clone();
                 let github_api = github_api.clone();
                 let pool = pool.clone();
                 let ongoing_indexation = ongoing_indexation.clone();
                 let span = info_span!(
-                    "indexation",
+                    "repository_indexation",
                     repository = repo_data.full_name,
                     source = repo_data.source.to_string()
                 );
@@ -604,6 +614,121 @@ async fn handle_webhooks(
                     }
                     info!("finished indexing");
                 }.instrument(span));
+                None
+            }
+            EventData::IssueIndexation(index_issue_data) => {
+                let embedding_api = embedding_api.clone();
+                let github_api = github_api.clone();
+                let pool = pool.clone();
+                let span = info_span!(
+                    "issue_indexation",
+                    repository = index_issue_data.repository_full_name,
+                    issue_number = index_issue_data.issue_number,
+                );
+                async {
+                    info!("indexing started");
+                    let issue = match github_api
+                        .get_issue(
+                            index_issue_data.issue_number,
+                            &index_issue_data.repository_full_name,
+                        )
+                        .await
+                    {
+                        Ok(issue) => issue,
+                        Err(err) => {
+                            error!(
+                                issue_number = index_issue_data.issue_number,
+                                err = err.to_string(),
+                                "error fetching issue"
+                            );
+                            return;
+                        }
+                    };
+                    let source = "Github".to_string();
+                    let comment_string = format!(
+                        "\n----\nComment: {}",
+                        issue
+                            .comments
+                            .iter()
+                            .map(|c| c.body.to_owned())
+                            .collect::<Vec<String>>()
+                            .join("\n----\nComment: ")
+                    );
+                    let issue_text = format!("# {}\n{}{}", issue.title, issue.body, comment_string);
+                    let raw_embedding = match embedding_api.generate_embedding(issue_text).await {
+                        Ok(embedding) => embedding,
+                        Err(err) => {
+                            error!(
+                                issue_number = issue.number,
+                                err = err.to_string(),
+                                "generate embedding error"
+                            );
+                            return;
+                        }
+                    };
+                    let embedding = Vector::from(raw_embedding);
+                    let issue_id: Option<i32> = match sqlx::query_scalar!(
+                        "select id from issues where source_id = $1",
+                        issue.id.to_string()
+                    )
+                    .fetch_optional(&pool)
+                    .await
+                    {
+                        Ok(id) => id,
+                        Err(err) => {
+                            error!(
+                                issue_number = issue.number,
+                                err = err.to_string(),
+                                "failed to fetch issue id"
+                            );
+                            return;
+                        }
+                    };
+                    let issue_id = if let Some(id) = issue_id {
+                        id
+                    } else {
+                        match sqlx::query_scalar(
+                        r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, repository_full_name, embedding)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                           returning id"#
+                        )
+                        .bind(issue.id.to_string())
+                        .bind(source)
+                        .bind(issue.title)
+                        .bind(issue.body)
+                        .bind(issue.is_pull_request)
+                        .bind(issue.number)
+                        .bind(issue.html_url)
+                        .bind(issue.url)
+                        .bind(&index_issue_data.repository_full_name)
+                        .bind(embedding)
+                        .fetch_one(&pool)
+                        .await {
+                            Ok(id) => id,
+                            Err(err) => {
+                                error!(issue_number = issue.number, err = err.to_string(), "error inserting issue");
+                                return;
+                            }
+                        }
+                    };
+                    if !issue.comments.is_empty() {
+                        let mut qb = QueryBuilder::new(
+                            "insert into comments (source_id, body, url, issue_id)",
+                        );
+                        qb.push_values(issue.comments, |mut b, comment| {
+                            b.push_bind(comment.id)
+                                .push_bind(comment.body)
+                                .push_bind(comment.url)
+                                .push_bind(issue_id);
+                        });
+                        qb.push("on conflict do nothing");
+                        if let Err(err) = qb.build().execute(&pool).await {
+                            error!(issue_number = issue.number, err = err.to_string(), "error inserting comments");
+                        }
+                    }
+                    info!("finished indexing");
+                }
+                .instrument(span).await;
                 None
             }
             EventData::RegenerateEmbeddings => {

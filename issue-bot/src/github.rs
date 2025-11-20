@@ -5,12 +5,12 @@ use chrono::Utc;
 use futures::Stream;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, LINK},
-    Client,
+    Client, StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::time::sleep;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::{
     config::{GithubApiConfig, MessageConfig},
@@ -38,6 +38,8 @@ pub enum GithubApiError {
     TaskJoin(#[from] tokio::task::JoinError),
     #[error("to str error: {0}")]
     ToStr(#[from] axum::http::header::ToStrError),
+    #[error("unsuccesful response: {0}")]
+    UnsuccesfulResponse(StatusCode),
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +180,28 @@ impl GithubApi {
         Ok(())
     }
 
+    pub(crate) async fn get_issue(
+        &self,
+        number: i32,
+        repository_full_name: &str,
+    ) -> Result<IssueWithComments, GithubApiError> {
+        let url = format!(
+            "https://api.github.com/repos/{}/issues/{}",
+            repository_full_name, number
+        );
+        let issue = self.client.get(&url).send().await?.json::<Issue>().await?;
+        let comments = self
+            .client
+            .get(&issue.comments_url)
+            .query(&[("direction", "asc")])
+            .send()
+            .await?
+            .json::<Vec<Comment>>()
+            .await?;
+
+        Ok(IssueWithComments::new(issue, comments))
+    }
+
     pub(crate) fn get_issues(
         &self,
         from_page: i32,
@@ -202,23 +226,30 @@ impl GithubApi {
                 let link_header = res.headers().get(LINK).cloned();
                 let ratelimit_remaining = res.headers().get(X_RATELIMIT_REMAINING).cloned();
                 let ratelimit_reset = res.headers().get(X_RATELIMIT_RESET).cloned();
+                if handle_ratelimit(ratelimit_remaining, ratelimit_reset).await? {
+                    continue;
+                }
                 let issues = res.json::<Vec<Issue>>().await?;
                 info!("fetched {} issues from page {}, getting comments for each issue next", issues.len(), page);
-                handle_ratelimit(ratelimit_remaining, ratelimit_reset).await?;
                 let page_issue_count = issues.len();
                 for (i, issue) in issues.into_iter().enumerate() {
-                    let res = client
-                        .get(&issue.comments_url)
-                        .query(&[("direction", "asc")])
-                        .send()
-                        .await?;
-                    let ratelimit_remaining = res.headers().get(X_RATELIMIT_REMAINING).cloned();
-                    let ratelimit_reset = res.headers().get(X_RATELIMIT_RESET).cloned();
-                    handle_ratelimit(ratelimit_remaining, ratelimit_reset).await?;
-                    let comments = res
-                        .json::<Vec<Comment>>()
-                        .await?;
-                    yield (IssueWithComments::new(issue, comments), (i + 1 == page_issue_count).then_some(page));
+                    loop {
+                        let res = client
+                            .get(&issue.comments_url)
+                            .query(&[("direction", "asc")])
+                            .send()
+                            .await?;
+                        let ratelimit_remaining = res.headers().get(X_RATELIMIT_REMAINING).cloned();
+                        let ratelimit_reset = res.headers().get(X_RATELIMIT_RESET).cloned();
+                        if handle_ratelimit(ratelimit_remaining, ratelimit_reset).await? {
+                            continue;
+                        }
+                        let comments = res
+                            .json::<Vec<Comment>>()
+                            .await?;
+                        yield (IssueWithComments::new(issue, comments), (i + 1 == page_issue_count).then_some(page));
+                        break;
+                    }
                 }
                 if get_next_page(link_header)?.is_none() {
                     break;
@@ -229,23 +260,23 @@ impl GithubApi {
     }
 }
 
+/// returns true if rate limited and sleeps until reset
 async fn handle_ratelimit(
     remaining: Option<HeaderValue>,
     reset: Option<HeaderValue>,
-) -> Result<(), GithubApiError> {
+) -> Result<bool, GithubApiError> {
     match (remaining, reset) {
         (Some(remaining), Some(reset)) => {
             let remaining: i32 = remaining.to_str()?.parse()?;
             let reset: i64 = reset.to_str()?.parse()?;
-            if remaining == 0 {
+            let rate_limited = remaining == 0;
+            if rate_limited {
                 let duration = Duration::from_secs((reset - Utc::now().timestamp() + 2) as u64);
                 info!("rate limit reached, sleeping for {}s", duration.as_secs());
                 sleep(duration).await;
             }
+            Ok(rate_limited)
         }
-        (remaining, reset) => {
-            return Err(GithubApiError::MissingRateLimitHeaders(remaining, reset))
-        }
+        (remaining, reset) => Err(GithubApiError::MissingRateLimitHeaders(remaining, reset)),
     }
-    Ok(())
 }

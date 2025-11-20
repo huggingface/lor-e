@@ -28,6 +28,8 @@
 
 - [x] fix: delete associated comments, reviews & review comments
 
+- [ ] check token length of prompt because of vllm switch
+
 ## Infra resilience tasks
 
 - [x] helm chart for the issue bot

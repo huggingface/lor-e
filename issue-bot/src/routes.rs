@@ -15,8 +15,8 @@ use sha2::Sha256;
 use tracing::info;
 
 use crate::{
-    deserialize_null_default, errors::ApiError, Action, AppState, EventData, RepositoryData,
-    Source, PRE_SHUTDOWN,
+    deserialize_null_default, errors::ApiError, Action, AppState, EventData, IndexIssueData,
+    RepositoryData, Source, PRE_SHUTDOWN,
 };
 
 fn compute_signature(payload: &[u8], secret: &str) -> String {
@@ -448,7 +448,22 @@ pub async fn index_repository(
     {
         return Err(ApiError::IndexationInProgress);
     }
-    state.tx.send(EventData::Indexation(repo_data)).await?;
+    state
+        .tx
+        .send(EventData::RepositoryIndexation(repo_data))
+        .await?;
+    Ok(())
+}
+
+pub async fn index_issue(
+    SecretValidator: SecretValidator,
+    State(state): State<AppState>,
+    Json(index_issue_data): Json<IndexIssueData>,
+) -> Result<(), ApiError> {
+    state
+        .tx
+        .send(EventData::IssueIndexation(index_issue_data))
+        .await?;
     Ok(())
 }
 

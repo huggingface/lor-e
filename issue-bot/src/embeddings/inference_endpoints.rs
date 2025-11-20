@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
-    Client,
+    Client, StatusCode,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::{config::EmbeddingApiConfig, APP_USER_AGENT};
@@ -12,17 +12,18 @@ use crate::{config::EmbeddingApiConfig, APP_USER_AGENT};
 use super::EmbeddingError;
 
 #[derive(Serialize)]
-enum TruncateDirection {
-    #[allow(unused)]
-    Left,
-    Right,
+struct OAIEmbedRequest {
+    input: String,
 }
 
-#[derive(Serialize)]
-struct EmbedRequest {
-    inputs: String,
-    truncate: bool,
-    truncate_direction: TruncateDirection,
+#[derive(Deserialize)]
+struct OAIEmbedResponse {
+    data: Vec<OAIEmbedData>,
+}
+
+#[derive(Deserialize)]
+struct OAIEmbedData {
+    embedding: Vec<f32>,
 }
 
 #[derive(Clone)]
@@ -52,11 +53,9 @@ impl EmbeddingApi {
         loop {
             let res = self
                 .client
-                .post(&self.cfg.url)
-                .json(&EmbedRequest {
-                    inputs: text.clone(),
-                    truncate: true,
-                    truncate_direction: TruncateDirection::Right,
+                .post(format!("{}/v1/embeddings", self.cfg.url))
+                .json(&OAIEmbedRequest {
+                    input: text.clone(),
                 })
                 .send()
                 .await;
@@ -75,7 +74,17 @@ impl EmbeddingApi {
                 }
                 Ok(res) => res,
             };
-            if res.status() != 200 {
+            let status = res.status();
+            // Shortcircuit on client errors (4xx)
+            if status.is_client_error() {
+                let response_content = res.text().await?;
+                warn!(
+                    "[status: {}] Embedding API returned: '{}'",
+                    status, response_content
+                );
+                return Err(EmbeddingError::HttpClientError(status));
+            }
+            if res.status() != StatusCode::OK {
                 let status = res.status();
                 let response_content = res.text().await?;
                 warn!(
@@ -90,9 +99,11 @@ impl EmbeddingApi {
                 continue;
             }
             return res
-                .json::<Vec<Vec<f32>>>()
+                .json::<OAIEmbedResponse>()
                 .await?
+                .data
                 .pop()
+                .map(|d| d.embedding)
                 .ok_or(EmbeddingError::MissingEmbedding);
         }
     }
