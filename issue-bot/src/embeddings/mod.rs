@@ -15,6 +15,8 @@ pub enum EmbeddingError {
     Io(#[from] std::io::Error),
     #[error("join error: {0}")]
     Join(#[from] tokio::task::JoinError),
+    #[error("maximum retries ({0}) exceeded")]
+    MaxRetriesExceeded(u32),
     #[error("embedding is missing from API response")]
     MissingEmbedding,
     #[error("reqwest error: {0}")]

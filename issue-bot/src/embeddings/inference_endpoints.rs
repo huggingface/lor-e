@@ -1,8 +1,11 @@
+use std::time::Duration;
+
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
     Client,
 };
 use serde::Serialize;
+use tracing::warn;
 
 use crate::{config::EmbeddingApiConfig, APP_USER_AGENT};
 
@@ -35,6 +38,7 @@ impl EmbeddingApi {
         auth_value.set_sensitive(true);
         headers.insert(AUTHORIZATION, auth_value);
         let client = Client::builder()
+            .timeout(Duration::from_secs(30))
             .user_agent(APP_USER_AGENT)
             .default_headers(headers)
             .build()?;
@@ -42,20 +46,51 @@ impl EmbeddingApi {
         Ok(Self { cfg, client })
     }
 
-    // TODO: handle API errors gracefully
     pub async fn generate_embedding(&self, text: String) -> Result<Vec<f32>, EmbeddingError> {
-        self.client
-            .post(&self.cfg.url)
-            .json(&EmbedRequest {
-                inputs: text,
-                truncate: true,
-                truncate_direction: TruncateDirection::Right,
-            })
-            .send()
-            .await?
-            .json::<Vec<Vec<f32>>>()
-            .await?
-            .pop()
-            .ok_or(EmbeddingError::MissingEmbedding)
+        let max_retries = 5;
+        let mut retries = 0;
+        loop {
+            if retries > max_retries {
+                return Err(EmbeddingError::MaxRetriesExceeded(max_retries));
+            }
+            let res = self
+                .client
+                .post(&self.cfg.url)
+                .json(&EmbedRequest {
+                    inputs: text.clone(),
+                    truncate: true,
+                    truncate_direction: TruncateDirection::Right,
+                })
+                .send()
+                .await;
+            let res = match res {
+                Err(e) => {
+                    if e.is_timeout() {
+                        warn!("Embedding API request timed out");
+                        retries += 1;
+                        tokio::time::sleep(Duration::from_secs(2_u64.pow(retries))).await;
+                        continue;
+                    }
+                    return Err(e.into());
+                }
+                Ok(res) => res,
+            };
+            if res.status() != 200 {
+                let status = res.status();
+                let response_content = res.text().await?;
+                warn!(
+                    "[status: {}] Embedding API returned: '{}'",
+                    status, response_content
+                );
+                retries += 1;
+                tokio::time::sleep(Duration::from_secs(2_u64.pow(retries))).await;
+                continue;
+            }
+            return res
+                .json::<Vec<Vec<f32>>>()
+                .await?
+                .pop()
+                .ok_or(EmbeddingError::MissingEmbedding);
+        }
     }
 }
