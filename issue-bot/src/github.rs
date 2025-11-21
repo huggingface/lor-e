@@ -227,7 +227,15 @@ impl GithubApi {
                 if handle_ratelimit(ratelimit_remaining, ratelimit_reset).await? {
                     continue;
                 }
-                let issues = res.json::<Vec<Issue>>().await?;
+                let bytes = res.bytes().await?;
+                let issues: Vec<Issue> = match serde_json::from_slice(&bytes) {
+                    Ok(issues) => issues,
+                    Err(e) => {
+                        error!("failed to deserialize issues from repo {}: {}, response: {}", repo_data.full_name, e, String::from_utf8_lossy(&bytes));
+                        Err(GithubApiError::SerdeJson(e))?;
+                        break;
+                    }
+                };
                 info!("fetched {} issues from page {}, getting comments for each issue next", issues.len(), page);
                 let page_issue_count = issues.len();
                 for (i, issue) in issues.into_iter().enumerate() {
@@ -242,9 +250,15 @@ impl GithubApi {
                         if handle_ratelimit(ratelimit_remaining, ratelimit_reset).await? {
                             continue;
                         }
-                        let comments = res
-                            .json::<Vec<Comment>>()
-                            .await?;
+                        let bytes = res.bytes().await?;
+                        let comments: Vec<Comment> = match serde_json::from_slice(&bytes) {
+                            Ok(comments) => comments,
+                            Err(e) => {
+                                error!("failed to deserialize comments for issue {} in repo {}: {}, response: {}", issue.number, repo_data.full_name, e, String::from_utf8_lossy(&bytes));
+                                Err(GithubApiError::SerdeJson(e))?;
+                                break;
+                            }
+                        };
                         yield (IssueWithComments::new(issue, comments), (i + 1 == page_issue_count).then_some(page));
                         break;
                     }
