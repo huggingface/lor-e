@@ -1,10 +1,9 @@
 use std::{
-    collections::HashSet,
     env,
     fmt::Display,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Once,
+        Once,
     },
     time::Duration,
 };
@@ -38,10 +37,7 @@ use summarization::SummarizationApi;
 use tokio::{
     net::TcpListener,
     select, signal,
-    sync::{
-        mpsc::{self, Receiver, Sender},
-        RwLock,
-    },
+    sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
 };
 use tower::{BoxError, ServiceBuilder};
@@ -288,19 +284,17 @@ struct Job {
     data: Json<JobData>,
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_webhooks_wrapper(
     rx: Receiver<EventData>,
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
-    ongoing_indexation: Arc<RwLock<HashSet<String>>>,
     slack: Slack,
     summarization_api: SummarizationApi,
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     select! {
-        _ = handle_webhooks(rx, embedding_api, github_api, huggingface_api, ongoing_indexation, slack, summarization_api, pool) => { Ok(()) },
+        _ = handle_webhooks(rx, embedding_api, github_api, huggingface_api, slack, summarization_api, pool) => { Ok(()) },
         _ = shutdown_signal() => { Ok(()) },
     }
 }
@@ -311,7 +305,6 @@ async fn handle_webhooks(
     embedding_api: EmbeddingApi,
     github_api: GithubApi,
     huggingface_api: HuggingfaceApi,
-    ongoing_indexation: Arc<RwLock<HashSet<String>>>,
     slack: Slack,
     summarization_api: SummarizationApi,
     pool: Pool<Postgres>,
@@ -561,7 +554,6 @@ async fn handle_webhooks(
                 let embedding_api = embedding_api.clone();
                 let github_api = github_api.clone();
                 let pool = pool.clone();
-                let ongoing_indexation = ongoing_indexation.clone();
                 let span = info_span!(
                     "repository_indexation",
                     repository = repo_data.full_name,
@@ -569,14 +561,6 @@ async fn handle_webhooks(
                 );
                 tokio::spawn(async move {
                     info!("indexing started");
-                    let contained_in_set = ongoing_indexation
-                        .write()
-                        .await
-                        .insert(repo_data.full_name.clone());
-                    if !contained_in_set {
-                        error!("indexation already ongoing");
-                        return;
-                    }
                     let job = match sqlx::query_as!(
                         Job,
                         r#"select data as "data: Json<JobData>" from jobs where repository_full_name = $1 and job_type = $2"#,
@@ -701,10 +685,6 @@ async fn handle_webhooks(
                             }
                         }
                     }
-                    ongoing_indexation
-                        .write()
-                        .await
-                        .remove(&repo_data.full_name);
                     if let Err(err) = sqlx::query!(
                         "delete from jobs where repository_full_name = $1",
                         repo_data.full_name
@@ -1048,7 +1028,6 @@ async fn main() -> anyhow::Result<()> {
     let embedding_api = EmbeddingApi::new(config.embedding_api)?;
     let github_api = GithubApi::new(config.github_api, config.message_config.clone())?;
     let huggingface_api = HuggingfaceApi::new(config.huggingface_api, config.message_config)?;
-    let ongoing_indexation = Arc::new(RwLock::new(HashSet::new()));
     let slack = Slack::new(&config.slack)?;
     let summarization_api = SummarizationApi::new(config.summarization_api)?;
 
@@ -1075,7 +1054,6 @@ async fn main() -> anyhow::Result<()> {
             embedding_api,
             github_api,
             huggingface_api,
-            ongoing_indexation,
             slack,
             summarization_api,
             pool
