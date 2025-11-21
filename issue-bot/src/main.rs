@@ -470,7 +470,7 @@ async fn handle_webhooks(
                     Action::Created => {
                         let issue_id = match sqlx::query!(
                             "select id from issues where source_id = $1",
-                            comment.source_id
+                            comment.issue_id
                         )
                         .fetch_optional(&pool)
                         .await
