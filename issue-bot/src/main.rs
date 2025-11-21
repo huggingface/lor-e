@@ -300,7 +300,7 @@ async fn handle_webhooks_wrapper(
     pool: Pool<Postgres>,
 ) -> anyhow::Result<()> {
     select! {
-        res = handle_webhooks(rx, embedding_api, github_api, huggingface_api, ongoing_indexation, slack, summarization_api, pool) => { res },
+        _ = handle_webhooks(rx, embedding_api, github_api, huggingface_api, ongoing_indexation, slack, summarization_api, pool) => { Ok(()) },
         _ = shutdown_signal() => { Ok(()) },
     }
 }
@@ -315,7 +315,7 @@ async fn handle_webhooks(
     slack: Slack,
     summarization_api: SummarizationApi,
     pool: Pool<Postgres>,
-) -> anyhow::Result<()> {
+) {
     while let Some(webhook_data) = rx.recv().await {
         let issue_id = match webhook_data {
             EventData::Issue(issue) => {
@@ -323,42 +323,93 @@ async fn handle_webhooks(
                 match issue.action {
                     Action::Created => {
                         let issue_text = format!("# {}\n{}", issue.title, issue.body);
-                        let embedding = Vector::from(
-                            embedding_api.generate_embedding(issue_text.clone()).await?,
-                        );
+                        let raw_embedding =
+                            match embedding_api.generate_embedding(issue_text.clone()).await {
+                                Ok(embedding) => embedding,
+                                Err(err) => {
+                                    error!(
+                                        issue_id = issue.source_id,
+                                        err = err.to_string(),
+                                        "generate embedding error"
+                                    );
+                                    continue;
+                                }
+                            };
+                        let embedding = Vector::from(raw_embedding);
 
-                        let closest_issues: Vec<ClosestIssue> = sqlx::query_as(
+                        let closest_issues: Vec<ClosestIssue> = match sqlx::query_as(
                             "select title, number, html_url, 1 - (embedding <=> $1) as cosine_similarity from issues order by embedding <=> $1 LIMIT 3",
                         )
                             .bind(embedding.clone())
                             .fetch_all(&pool)
-                            .await?;
+                            .await {
+                            Ok(issues) => issues,
+                            Err(err) => {
+                                error!(
+                                    issue_id = issue.source_id,
+                                    err = err.to_string(),
+                                    "failed to fetch closest issues"
+                                );
+                                continue;
+                            }
+                        };
 
-                        let summarized_issue = summarization_api.summarize(issue_text).await?;
+                        let summarized_issue = match summarization_api.summarize(issue_text).await {
+                            Ok(summary) => summary,
+                            Err(err) => {
+                                error!(
+                                    issue_id = issue.source_id,
+                                    err = err.to_string(),
+                                    "summarization error"
+                                );
+                                continue;
+                            }
+                        };
 
-                        slack
+                        if let Err(err) = slack
                             .closest_issues(summarized_issue, &issue, &closest_issues)
-                            .await?;
+                            .await
+                        {
+                            error!(
+                                issue_id = issue.source_id,
+                                err = err.to_string(),
+                                "failed to send closest issues to slack"
+                            );
+                        }
 
                         match (issue.is_pull_request, &issue.source) {
                             (false, Source::Github) => {
-                                github_api
+                                if let Err(err) = github_api
                                     .comment_on_issue(&issue.url, closest_issues)
-                                    .await?;
+                                    .await
+                                {
+                                    error!(
+                                        issue_id = issue.source_id,
+                                        err = err.to_string(),
+                                        "failed to comment on issue"
+                                    );
+                                }
                             }
                             (false, Source::HuggingFace) => {
-                                huggingface_api
+                                if let Err(err) = huggingface_api
                                     .comment_on_issue(&issue.url, closest_issues)
-                                    .await?;
+                                    .await
+                                {
+                                    error!(
+                                        issue_id = issue.source_id,
+                                        err = err.to_string(),
+                                        "failed to comment on issue"
+                                    );
+                                }
                             }
                             _ => (),
                         }
 
-                        sqlx::query(
+                        if let Err(err)  =sqlx::query(
                         r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, repository_full_name, embedding)
                            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
                         )
-                        .bind(issue.source_id)
+                        .bind(&issue.source_id)
                         .bind(issue.source.to_string())
                         .bind(issue.title)
                         .bind(issue.body)
@@ -369,12 +420,18 @@ async fn handle_webhooks(
                         .bind(issue.repository_full_name)
                         .bind(embedding)
                         .execute(&pool)
-                        .await?;
+                        .await {
+                            error!(
+                                issue_id = issue.source_id,
+                                err = err.to_string(),
+                                "error inserting issue"
+                            );
+                        }
 
                         None
                     }
                     Action::Edited => {
-                        sqlx::query!(
+                        if let Err(err) = sqlx::query!(
                             r#"update issues
                            set title = $1, body = $2, url = $3, updated_at = current_timestamp
                            where source_id = $4"#,
@@ -384,16 +441,30 @@ async fn handle_webhooks(
                             issue.source_id,
                         )
                         .execute(&pool)
-                        .await?;
+                        .await
+                        {
+                            error!(
+                                issue_id = issue.source_id,
+                                err = err.to_string(),
+                                "error updating issue"
+                            );
+                        }
                         Some(issue.source_id)
                     }
                     Action::Deleted => {
-                        sqlx::query!(
+                        if let Err(err) = sqlx::query!(
                             r#"DELETE FROM issues WHERE source_id = $1"#,
                             issue.source_id
                         )
                         .execute(&pool)
-                        .await?;
+                        .await
+                        {
+                            error!(
+                                issue_id = issue.source_id,
+                                err = err.to_string(),
+                                "error deleting issue"
+                            );
+                        }
                         None
                     }
                 }
@@ -402,14 +473,25 @@ async fn handle_webhooks(
                 info!("handling comment (state: {})", comment.action);
                 match comment.action {
                     Action::Created => {
-                        let issue_id = sqlx::query!(
+                        let issue_id = match sqlx::query!(
                             "select id from issues where source_id = $1",
                             comment.source_id
                         )
                         .fetch_optional(&pool)
-                        .await?;
+                        .await
+                        {
+                            Ok(id) => id,
+                            Err(err) => {
+                                error!(
+                                    comment_id = comment.source_id,
+                                    err = err.to_string(),
+                                    "failed to fetch issue id for comment"
+                                );
+                                None
+                            }
+                        };
                         if let Some(issue_id) = issue_id {
-                            sqlx::query!(
+                            if let Err(err) = sqlx::query!(
                                 r#"insert into comments (source_id, body, url, issue_id)
                                values ($1, $2, $3, $4)"#,
                                 comment.source_id,
@@ -418,7 +500,14 @@ async fn handle_webhooks(
                                 issue_id.id,
                             )
                             .execute(&pool)
-                            .await?;
+                            .await
+                            {
+                                error!(
+                                    comment_id = comment.source_id,
+                                    err = err.to_string(),
+                                    "error inserting comment"
+                                );
+                            }
                             Some(comment.source_id)
                         } else {
                             error!(
@@ -431,7 +520,7 @@ async fn handle_webhooks(
                         }
                     }
                     Action::Edited => {
-                        sqlx::query!(
+                        if let Err(err) = sqlx::query!(
                             r#"update comments
                            set body = $1, url = $2, updated_at = current_timestamp
                            where source_id = $3"#,
@@ -440,16 +529,30 @@ async fn handle_webhooks(
                             comment.source_id,
                         )
                         .execute(&pool)
-                        .await?;
+                        .await
+                        {
+                            error!(
+                                comment_id = comment.source_id,
+                                err = err.to_string(),
+                                "error updating comment"
+                            );
+                        }
                         Some(comment.issue_id)
                     }
                     Action::Deleted => {
-                        sqlx::query!(
+                        if let Err(err) = sqlx::query!(
                             r#"DELETE FROM comments WHERE source_id = $1"#,
                             comment.source_id
                         )
                         .execute(&pool)
-                        .await?;
+                        .await
+                        {
+                            error!(
+                                comment_id = comment.source_id,
+                                err = err.to_string(),
+                                "error deleting comment"
+                            );
+                        }
                         Some(comment.issue_id)
                     }
                 }
@@ -844,10 +947,15 @@ async fn handle_webhooks(
         };
 
         if let Some(issue_id) = issue_id {
-            update_issue_embeddings(&embedding_api, &pool, &issue_id).await?;
+            if let Err(err) = update_issue_embeddings(&embedding_api, &pool, &issue_id).await {
+                error!(
+                    issue_id = issue_id,
+                    err = err.to_string(),
+                    "error updating issue embeddings"
+                );
+            }
         }
     }
-    Ok(())
 }
 
 async fn update_issue_embeddings(

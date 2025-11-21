@@ -48,7 +48,7 @@ impl EmbeddingApi {
     }
 
     pub async fn generate_embedding(&self, text: String) -> Result<Vec<f32>, EmbeddingError> {
-        let max_retries = 5;
+        let max_retries = 6;
         let mut retries = 0;
         loop {
             let res = self
