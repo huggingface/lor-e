@@ -268,13 +268,15 @@ struct ClosestIssue {
 
 #[derive(Debug, Deserialize, Serialize)]
 enum JobData {
-    IssueIndexation { issues_page: i32 },
+    // FIXME: naming is a bit confusing, this means "repository issue indexation"
+    IssueIndexation { next_url: String },
     EmbeddingsRegeneration { current_issue: i32 },
 }
 
 #[derive(Debug, sqlx::Type)]
 #[sqlx(type_name = "job_type", rename_all = "snake_case")]
 enum JobType {
+    // FIXME: naming is a bit confusing, this means "repository issue indexation"
     IssueIndexation,
     EmbeddingsRegeneration,
 }
@@ -576,11 +578,11 @@ async fn handle_webhooks(
                         }
                     };
                     let from_issues_page =
-                        job.as_ref().and_then(|j| match j.data.0 { JobData::IssueIndexation { issues_page } => Some(issues_page + 1), _ => None}).unwrap_or(1);
+                        job.and_then(|j| match j.data.0 { JobData::IssueIndexation { next_url } => Some(next_url), _ => None});
                     let issues = github_api.get_issues(from_issues_page, repo_data.clone());
                     pin_mut!(issues);
                     while let Some(issue) = issues.next().await {
-                        let (issue, page) = match issue {
+                        let (issue, next_url) = match issue {
                             Ok(issue) => issue,
                             Err(err) => {
                                 error!(err = err.to_string(), "error fetching next item from issues stream");
@@ -664,7 +666,7 @@ async fn handle_webhooks(
                                 error!(issue_number = issue.number, err = err.to_string(), "error inserting comments");
                             }
                         }
-                        if let Some(page) = page {
+                        if let Some(next_url) = next_url {
                             if let Err(err) = sqlx::query(
                                 r#"insert into jobs (data, job_type, repository_full_name)
                                values ($1, $2, $3)
@@ -675,7 +677,7 @@ async fn handle_webhooks(
                                    updated_at = current_timestamp"#,
                             )
                             .bind(Json(JobData::IssueIndexation {
-                                issues_page: page,
+                                next_url,
                             }))
                             .bind(JobType::IssueIndexation)
                             .bind(&repo_data.full_name)

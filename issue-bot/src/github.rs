@@ -202,21 +202,24 @@ impl GithubApi {
 
     pub(crate) fn get_issues(
         &self,
-        from_page: i32,
+        from_url: Option<String>,
         repo_data: RepositoryData,
-    ) -> impl Stream<Item = Result<(IssueWithComments, Option<i32>), GithubApiError>> + use<'_>
+    ) -> impl Stream<Item = Result<(IssueWithComments, Option<String>), GithubApiError>> + use<'_>
     {
         try_stream! {
-            let url = format!("https://api.github.com/repos/{}/issues", repo_data.full_name);
             let client = self.client.clone();
-            let mut page = from_page;
+            let mut url = if let Some(from_url) = from_url {
+                info!("resuming fetching issues from repo {} at {}", repo_data.full_name, from_url);
+                from_url
+            } else {
+                format!("https://api.github.com/repos/{}/issues", repo_data.full_name)
+            };
             loop {
                 let res = client
                     .get(&url)
                     .query(&[
                         ("state", "all"),
                         ("direction", "desc"),
-                        ("page", &page.to_string()),
                         ("per_page", "100"),
                     ])
                 .send()
@@ -236,8 +239,11 @@ impl GithubApi {
                         break;
                     }
                 };
-                info!("fetched {} issues from page {}, getting comments for each issue next", issues.len(), page);
+                info!("fetched {} issues from {}, getting comments for each issue next", issues.len(), url);
                 let page_issue_count = issues.len();
+                if let Some(next_url) = get_next_page(link_header.clone())? {
+                    url = next_url;
+                };
                 for (i, issue) in issues.into_iter().enumerate() {
                     loop {
                         let res = client
@@ -259,14 +265,13 @@ impl GithubApi {
                                 break;
                             }
                         };
-                        yield (IssueWithComments::new(issue, comments), (i + 1 == page_issue_count).then_some(page));
+                        yield (IssueWithComments::new(issue, comments), (i + 1 == page_issue_count).then_some(url.clone()));
                         break;
                     }
                 }
                 if get_next_page(link_header)?.is_none() {
                     break;
                 }
-                page += 1;
             }
         }
     }
