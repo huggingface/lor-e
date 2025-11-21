@@ -49,7 +49,7 @@ impl EmbeddingApi {
 
     pub async fn generate_embedding(&self, text: String) -> Result<Vec<f32>, EmbeddingError> {
         const MAX_RETRIES: u32 = 5;
-        const MAX_WAKE_UP_RETRIES: u32 = 10;
+        const MAX_WAKE_UP_RETRIES: u32 = 30;
         let mut retries = 0;
         let mut wake_up_retries = 0;
         loop {
