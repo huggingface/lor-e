@@ -170,7 +170,7 @@ pub async fn github_webhook(
                     state
                         .tx
                         .send(EventData::Issue(crate::IssueData {
-                            source_id: issue.issue.id.to_string(),
+                            source_id: issue.issue.id,
                             action: issue.action.to_action(),
                             title: issue.issue.title,
                             body: issue.issue.body,
@@ -191,8 +191,8 @@ pub async fn github_webhook(
             state
                 .tx
                 .send(EventData::Comment(crate::CommentData {
-                    source_id: comment.comment.id.to_string(),
-                    issue_id: comment.issue.id.to_string(),
+                    source_id: comment.comment.id,
+                    issue_id: comment.issue.id,
                     action: comment.action.to_action(),
                     body: comment.comment.body,
                     url: comment.comment.url,
@@ -293,7 +293,7 @@ struct Url {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Discussion {
-    id: String,
+    id: i64,
     is_pull_request: bool,
     num: i32,
     title: String,
@@ -313,7 +313,7 @@ struct Author {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HfComment {
-    id: String,
+    id: i64,
     #[serde(default)]
     content: String,
     author: Author,

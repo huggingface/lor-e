@@ -178,7 +178,7 @@ async fn start_main_server(config: ServerConfig, state: AppState) -> anyhow::Res
 }
 
 struct IssueData {
-    source_id: String,
+    source_id: i64,
     action: Action,
     title: String,
     body: String,
@@ -191,9 +191,9 @@ struct IssueData {
 }
 
 struct CommentData {
-    source_id: String,
+    source_id: i64,
     action: Action,
-    issue_id: String,
+    issue_id: i64,
     body: String,
     url: String,
 }
@@ -402,7 +402,7 @@ async fn handle_webhooks(
                         r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, repository_full_name, embedding)
                            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
                         )
-                        .bind(&issue.source_id)
+                        .bind(issue.source_id)
                         .bind(issue.source.to_string())
                         .bind(issue.title)
                         .bind(issue.body)
@@ -612,7 +612,7 @@ async fn handle_webhooks(
                             Vector::from(raw_embedding);
                         let issue_id: Option<i32> = match sqlx::query_scalar!(
                             "select id from issues where source_id = $1",
-                            issue.id.to_string()
+                            issue.id
                         )
                         .fetch_optional(&pool)
                         .await {
@@ -630,7 +630,7 @@ async fn handle_webhooks(
                                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                                returning id"#
                             )
-                            .bind(issue.id.to_string())
+                            .bind(issue.id)
                             .bind(source)
                             .bind(issue.title)
                             .bind(issue.body)
@@ -751,7 +751,7 @@ async fn handle_webhooks(
                     let embedding = Vector::from(raw_embedding);
                     let issue_id: Option<i32> = match sqlx::query_scalar!(
                         "select id from issues where source_id = $1",
-                        issue.id.to_string()
+                        issue.id
                     )
                     .fetch_optional(&pool)
                     .await
@@ -774,7 +774,7 @@ async fn handle_webhooks(
                            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                            returning id"#
                         )
-                        .bind(issue.id.to_string())
+                        .bind(issue.id)
                         .bind(source)
                         .bind(issue.title)
                         .bind(issue.body)
@@ -868,7 +868,7 @@ async fn handle_webhooks(
                         info!("regenerating embeddings for {} issues", total_issues);
                         for (current_issue_nb, issue) in issues.into_iter().enumerate() {
                             if let Err(err) =
-                                update_issue_embeddings(&embedding_api, &pool, &issue.source_id)
+                                update_issue_embeddings(&embedding_api, &pool, issue.source_id)
                                     .await
                             {
                                 error!(
@@ -927,7 +927,7 @@ async fn handle_webhooks(
         };
 
         if let Some(issue_id) = issue_id {
-            if let Err(err) = update_issue_embeddings(&embedding_api, &pool, &issue_id).await {
+            if let Err(err) = update_issue_embeddings(&embedding_api, &pool, issue_id).await {
                 error!(
                     issue_id = issue_id,
                     err = err.to_string(),
@@ -941,7 +941,7 @@ async fn handle_webhooks(
 async fn update_issue_embeddings(
     embedding_api: &EmbeddingApi,
     pool: &Pool<Postgres>,
-    issue_id: &str,
+    issue_id: i64,
 ) -> anyhow::Result<()> {
     let issue = sqlx::query!(
         r#"
@@ -949,7 +949,7 @@ async fn update_issue_embeddings(
               i.title,
               i.body,
               (
-                SELECT JSON_AGG(c.body)
+                SELECT JSON_AGG(c.body ORDER BY c.source_id)
                 FROM comments AS c
                 WHERE c.issue_id = i.id
               ) AS comments
