@@ -26,6 +26,8 @@ pub enum EmbeddingError {
     Reqwest(#[from] reqwest::Error),
     #[error("serde json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
+    #[error("max retries ({0}) to wake up from autoscaling exceeded, service unavailable")]
+    ServiceUnavailable(u32),
     // #[error("tokenizers error: {0}")]
     // Tokenizers(#[from] tokenizers::Error),
 }

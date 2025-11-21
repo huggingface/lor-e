@@ -48,8 +48,10 @@ impl EmbeddingApi {
     }
 
     pub async fn generate_embedding(&self, text: String) -> Result<Vec<f32>, EmbeddingError> {
-        let max_retries = 6;
+        const MAX_RETRIES: u32 = 5;
+        const MAX_WAKE_UP_RETRIES: u32 = 10;
         let mut retries = 0;
+        let mut wake_up_retries = 0;
         loop {
             let res = self
                 .client
@@ -64,8 +66,8 @@ impl EmbeddingApi {
                     if e.is_timeout() {
                         warn!("Embedding API request timed out");
                         retries += 1;
-                        if retries > max_retries {
-                            return Err(EmbeddingError::MaxRetriesExceeded(max_retries));
+                        if retries > MAX_RETRIES {
+                            return Err(EmbeddingError::MaxRetriesExceeded(MAX_RETRIES));
                         }
                         tokio::time::sleep(Duration::from_secs(2_u64.pow(retries))).await;
                         continue;
@@ -85,6 +87,16 @@ impl EmbeddingApi {
                 return Err(EmbeddingError::HttpClientError(status));
             }
             if res.status() != StatusCode::OK {
+                // Autoscaled to 0, waiting for wake up
+                if res.status() == StatusCode::SERVICE_UNAVAILABLE {
+                    warn!("Embedding API service unavailable, retrying...");
+                    wake_up_retries += 1;
+                    if wake_up_retries > MAX_WAKE_UP_RETRIES {
+                        return Err(EmbeddingError::ServiceUnavailable(MAX_WAKE_UP_RETRIES));
+                    }
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    continue;
+                }
                 let status = res.status();
                 let response_content = res.text().await?;
                 warn!(
@@ -92,8 +104,8 @@ impl EmbeddingApi {
                     status, response_content
                 );
                 retries += 1;
-                if retries > max_retries {
-                    return Err(EmbeddingError::MaxRetriesExceeded(max_retries));
+                if retries > MAX_RETRIES {
+                    return Err(EmbeddingError::MaxRetriesExceeded(MAX_RETRIES));
                 }
                 tokio::time::sleep(Duration::from_secs(2_u64.pow(retries))).await;
                 continue;
