@@ -400,7 +400,7 @@ async fn handle_webhooks(
                             _ => (),
                         }
 
-                        if let Err(err)  =sqlx::query(
+                        if let Err(err) = sqlx::query(
                         r#"insert into issues (source_id, source, title, body, is_pull_request, number, html_url, url, repository_full_name, embedding)
                            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
                         )
@@ -503,7 +503,7 @@ async fn handle_webhooks(
                                     "error inserting comment"
                                 );
                             }
-                            Some(comment.source_id)
+                            Some(comment.issue_id)
                         } else {
                             error!(
                                 comment_id = comment.source_id,
@@ -870,8 +870,7 @@ async fn handle_webhooks(
                         info!("regenerating embeddings for {} issues", total_issues);
                         for (current_issue_nb, issue) in issues.into_iter().enumerate() {
                             if let Err(err) =
-                                update_issue_embeddings(&embedding_api, &pool, issue.source_id)
-                                    .await
+                                update_issue_embedding(&embedding_api, &pool, issue.source_id).await
                             {
                                 error!(
                                     issue_id = issue.source_id,
@@ -929,7 +928,7 @@ async fn handle_webhooks(
         };
 
         if let Some(issue_id) = issue_id {
-            if let Err(err) = update_issue_embeddings(&embedding_api, &pool, issue_id).await {
+            if let Err(err) = update_issue_embedding(&embedding_api, &pool, issue_id).await {
                 error!(
                     issue_id = issue_id,
                     err = err.to_string(),
@@ -940,7 +939,7 @@ async fn handle_webhooks(
     }
 }
 
-async fn update_issue_embeddings(
+async fn update_issue_embedding(
     embedding_api: &EmbeddingApi,
     pool: &Pool<Postgres>,
     issue_id: i64,
