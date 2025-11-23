@@ -1,6 +1,7 @@
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::info;
 
 use crate::{config::SlackConfig, ClosestIssue, IssueData};
 
@@ -93,6 +94,7 @@ impl Slack {
             .json(&body)
             .send()
             .await?;
+        info!("sent closest issues to slack channel:\n{}", body.text);
         Ok(())
     }
 }

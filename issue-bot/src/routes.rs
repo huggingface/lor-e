@@ -542,7 +542,7 @@ mod tests {
         };
         let mut app = app(state);
 
-        let payload_body = r#"{"event":{"action":"create", "scope":"discussion"}, "discussion":{"id":"test", "isPullRequest":false, "num":1, "title":"my test issue","url":{"api":"https://huggingface.co/test", "web":"https://huggingface.co/test"}}}"#;
+        let payload_body = r#"{"event":{"action":"create", "scope":"discussion"}, "discussion":{"id":1234, "isPullRequest":false, "num":1, "title":"my test issue","url":{"api":"https://huggingface.co/test", "web":"https://huggingface.co/test"}}}"#;
 
         let response = app
             .borrow_mut()
@@ -560,7 +560,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let payload_body = r#"{"event":{"action":"create", "scope":"discussion.comment"}, "discussion":{"id":"test", "isPullRequest":false, "num":1, "title":"my test issue","url":{"api":"https://huggingface.co/test", "web":"https://huggingface.co/test"}}, "comment":{"id":"test", "content":"some comment", "author":{"id":"test"},"url":{"web":"https://huggingface.co/test"}}}"#;
+        let payload_body = r#"{"event":{"action":"create", "scope":"discussion.comment"}, "discussion":{"id":1234, "isPullRequest":false, "num":1, "title":"my test issue","url":{"api":"https://huggingface.co/test", "web":"https://huggingface.co/test"}}, "comment":{"id":1234, "content":"some comment", "author":{"id":"test"},"url":{"web":"https://huggingface.co/test"}}}"#;
 
         let response = app
             .oneshot(
