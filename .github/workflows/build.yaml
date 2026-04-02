@@ -29,7 +29,7 @@ jobs:
         image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: local
-          POSTGRES_PASSWORD: supersecurepassword
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         ports:
           - 5432:5432
         options: >-
@@ -89,7 +89,7 @@ jobs:
 
       - name: Setup database
         env:
-          PGPASSWORD: "supersecurepassword"
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
          sudo apt-get update && sudo apt-get install libpq-dev -y
          psql -U local -a -f init_db.sql -h localhost
@@ -107,7 +107,7 @@ jobs:
           build-args: |
             GIT_SHA=${{ env.GITHUB_SHA }}
             DOCKER_LABEL=sha-${{ env.GITHUB_SHA_SHORT }}
-            DATABASE_URL=postgres://local:supersecurepassword@localhost:5432/lor_e
+            DATABASE_URL=postgres://local:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/lor_e
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
