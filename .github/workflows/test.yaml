@@ -15,8 +15,12 @@ on:
     branches:
       - 'main'
 
+permissions: {}
+
 jobs:
   tests:
+    permissions:
+      contents: read
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
@@ -36,10 +40,10 @@ jobs:
           --health-retries 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Setup database
         env:
           PGPASSWORD: "supersecurepassword"
